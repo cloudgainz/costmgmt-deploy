@@ -1,0 +1,424 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [
+      {
+        "name": "namePrefix",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Name prefix",
+        "defaultValue": "costmgmt",
+        "toolTip": "Prefix for the export storage account. A random suffix gets appended.",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-z0-9]{3,14}$",
+          "validationMessage": "3-14 lowercase alphanumeric characters."
+        }
+      }
+    ],
+    "steps": [
+      {
+        "name": "costManagement",
+        "label": "Cost Management exports",
+        "elements": [
+          {
+            "name": "billingInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Warning",
+              "text": "The exports run at MCA billing profile scope, which a resource group deployment cannot reach directly. A managed identity has to hold the billing role. You can create one here or point at an existing one.",
+              "uri": "https://learn.microsoft.com/azure/cost-management-billing/manage/understand-mca-roles"
+            }
+          },
+          {
+            "name": "billingAccountId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Billing account ID",
+            "toolTip": "MCA billing account ID.",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "billingProfileId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Billing profile ID",
+            "toolTip": "MCA billing profile ID. az billing profile list --account-name <billing account id>",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "identityMode",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Export identity",
+            "defaultValue": "Use an existing managed identity",
+            "toolTip": "The identity the export script runs as. It must hold the billing role on the profile.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Use an existing managed identity",
+                  "value": "existing"
+                },
+                {
+                  "label": "Create a new managed identity",
+                  "value": "create"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "exportScriptIdentityId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Existing managed identity resource ID",
+            "toolTip": "Full resource ID of the user-assigned managed identity holding the billing role. az identity show -g <rg> -n <name> --query id -o tsv",
+            "constraints": {
+              "required": true,
+              "regex": "^/subscriptions/.+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/.+$",
+              "validationMessage": "Must be a full userAssignedIdentities resource ID."
+            },
+            "visible": "[equals(steps('costManagement').identityMode, 'existing')]"
+          },
+          {
+            "name": "identityName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "New managed identity name",
+            "defaultValue": "",
+            "toolTip": "Blank falls back to mi-<name prefix>-exports.",
+            "visible": "[equals(steps('costManagement').identityMode, 'create')]",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "createIdentityInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[equals(steps('costManagement').identityMode, 'create')]",
+            "options": {
+              "icon": "Warning",
+              "text": "A brand new identity has no billing permission, and this deployment cannot grant it one. Leave 'Create the cost management exports' unticked for this first run. When it finishes, grant the new identity the billing role on your billing profile, then run the deployment again with that box ticked. The exportIdentityPrincipalId output tells you which principal to grant."
+            }
+          },
+          {
+            "name": "deployExports",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Create the cost management exports",
+            "defaultValue": true,
+            "toolTip": "Untick on the first pass when creating a new identity. Storage, networking and Data Factory still deploy."
+          },
+          {
+            "name": "exportPrefix",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Export name prefix",
+            "defaultValue": "",
+            "toolTip": "Stuck on the front of each export name. Leave blank to reuse the name prefix.",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "containerName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Export container",
+            "defaultValue": "cost-exports",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "exportFormat",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Export format",
+            "defaultValue": "Parquet",
+            "toolTip": "Parquet is smaller and faster to query. Csv is easier to eyeball.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Parquet",
+                  "value": "Parquet"
+                },
+                {
+                  "label": "Csv",
+                  "value": "Csv"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "focusDatasetVersion",
+            "type": "Microsoft.Common.DropDown",
+            "label": "FOCUS dataset version",
+            "defaultValue": "1.2-preview",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "1.2-preview",
+                  "value": "1.2-preview"
+                },
+                {
+                  "label": "1.0r2",
+                  "value": "1.0r2"
+                }
+              ],
+              "required": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "networking",
+        "label": "Networking",
+        "elements": [
+          {
+            "name": "enablePrivateEndpoint",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Create a private endpoint for the export storage",
+            "defaultValue": true,
+            "toolTip": "Also flips the storage firewall to Deny by default. The exports themselves still arrive over the public endpoint via the AzureServices bypass - this endpoint is for whoever reads the data."
+          },
+          {
+            "name": "vnet",
+            "type": "Microsoft.Network.VirtualNetworkCombo",
+            "label": {
+              "virtualNetwork": "Virtual network",
+              "subnets": "Subnets"
+            },
+            "toolTip": {
+              "virtualNetwork": "Create a new VNet or pick one that already exists.",
+              "subnets": "Subnet the private endpoint NIC lands in."
+            },
+            "visible": "[steps('networking').enablePrivateEndpoint]",
+            "defaultValue": {
+              "name": "vnet-costmgmt",
+              "addressPrefixSize": "/16"
+            },
+            "constraints": {
+              "minAddressPrefixSize": "/24"
+            },
+            "options": {
+              "hideExisting": false
+            },
+            "subnets": {
+              "peSubnet": {
+                "label": "Private endpoint subnet",
+                "defaultValue": {
+                  "name": "snet-privateendpoints",
+                  "addressPrefixSize": "/24"
+                },
+                "constraints": {
+                  "minAddressPrefixSize": "/28",
+                  "required": true
+                }
+              }
+            }
+          },
+          {
+            "name": "privateDnsZoneMode",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Private DNS zone",
+            "defaultValue": "Create a new zone",
+            "toolTip": "A VNet can only be linked to one privatelink.blob.core.windows.net zone. If the VNet you picked already has one, use it instead of creating a second.",
+            "visible": "[steps('networking').enablePrivateEndpoint]",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Create a new zone",
+                  "value": "create"
+                },
+                {
+                  "label": "Use an existing zone",
+                  "value": "existing"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "existingPrivateDnsZoneId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Existing private DNS zone resource ID",
+            "toolTip": "Full resource ID of the existing privatelink.blob.core.windows.net zone.",
+            "visible": "[and(steps('networking').enablePrivateEndpoint, equals(steps('networking').privateDnsZoneMode, 'existing'))]",
+            "constraints": {
+              "required": true,
+              "regex": "^/subscriptions/.+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$",
+              "validationMessage": "Must be the full resource ID of a privatelink.blob.core.windows.net zone."
+            }
+          },
+          {
+            "name": "existingVnetInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[and(steps('networking').enablePrivateEndpoint, equals(steps('networking').vnet.newOrExisting, 'existing'))]",
+            "options": {
+              "icon": "Info",
+              "text": "Using an existing subnet: whoever runs this deployment needs join permission on it (Microsoft.Network/virtualNetworks/subnets/join/action), and the subnet must allow private endpoints."
+            }
+          }
+        ]
+      },
+      {
+        "name": "dataMover",
+        "label": "Data mover",
+        "elements": [
+          {
+            "name": "deployDataFactory",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Deploy the Data Factory mover",
+            "defaultValue": true,
+            "toolTip": "Untick to stand up the cost management exports only."
+          },
+          {
+            "name": "siteName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Site name (destination container)",
+            "defaultValue": "",
+            "toolTip": "Root container on the customer storage account the exports get sent to, e.g. contoso-adf-focus. Also used to name the Data Factory resources.",
+            "constraints": {
+              "required": true,
+              "regex": "^(?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$",
+              "validationMessage": "3-63 chars, lowercase letters, numbers and single hyphens. Must start and end with a letter or number."
+            },
+            "visible": "[steps('dataMover').deployDataFactory]"
+          },
+          {
+            "name": "customerStorageAccount",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Customer storage account name",
+            "toolTip": "Destination account the export folders get mirrored into.",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z0-9]{3,24}$",
+              "validationMessage": "3-24 lowercase alphanumeric characters."
+            }
+          },
+          {
+            "name": "customerToken",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Customer SAS token",
+              "confirmPassword": "Confirm SAS token"
+            },
+            "toolTip": "Account-level SAS for the customer storage account. Needs rwdlac on the blob service.",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "options": {
+              "hideConfirmation": true
+            },
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "timeZone",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Time zone",
+            "defaultValue": "Eastern Standard Time",
+            "toolTip": "Windows time zone ID the triggers and the pipeline date maths run in.",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "dailyRunTime",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Daily run time (HH:mm)",
+            "defaultValue": "02:00",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "constraints": {
+              "required": true,
+              "regex": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+              "validationMessage": "24-hour HH:mm, e.g. 02:00"
+            }
+          },
+          {
+            "name": "monthlyRunTime",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Monthly run time (HH:mm)",
+            "defaultValue": "02:00",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "constraints": {
+              "required": true,
+              "regex": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+              "validationMessage": "24-hour HH:mm, e.g. 02:00"
+            }
+          },
+          {
+            "name": "monthlyDayOfMonth",
+            "type": "Microsoft.Common.Slider",
+            "label": "Monthly run day",
+            "defaultValue": 6,
+            "min": 1,
+            "max": 28,
+            "showStepMarkers": false,
+            "toolTip": "Day of the month the monthly trigger fires.",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "catchupCutoffDay",
+            "type": "Microsoft.Common.Slider",
+            "label": "Catch-up cutoff day",
+            "defaultValue": 5,
+            "min": 1,
+            "max": 28,
+            "showStepMarkers": false,
+            "toolTip": "N in (today - N). With N=5, runs on the 1st to the 5th still mirror last month's folder.",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "constraints": {
+              "required": true
+            }
+          },
+          {
+            "name": "triggerInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[steps('dataMover').deployDataFactory]",
+            "options": {
+              "icon": "Info",
+              "text": "ARM always creates Data Factory triggers stopped. After the deployment finishes, run the startTriggersCommand from the outputs to start them."
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "namePrefix": "[basics('namePrefix')]",
+      "siteName": "[steps('dataMover').siteName]",
+      "location": "[location()]",
+      "billingAccountId": "[steps('costManagement').billingAccountId]",
+      "billingProfileId": "[steps('costManagement').billingProfileId]",
+      "exportScriptIdentityId": "[steps('costManagement').exportScriptIdentityId]",
+      "exportPrefix": "[steps('costManagement').exportPrefix]",
+      "containerName": "[steps('costManagement').containerName]",
+      "exportFormat": "[steps('costManagement').exportFormat]",
+      "compressionMode": "[if(equals(steps('costManagement').exportFormat, 'Parquet'), 'snappy', 'gzip')]",
+      "focusDatasetVersion": "[steps('costManagement').focusDatasetVersion]",
+      "enablePrivateEndpoint": "[steps('networking').enablePrivateEndpoint]",
+      "deployDataFactory": "[steps('dataMover').deployDataFactory]",
+      "customerStorageAccount": "[steps('dataMover').customerStorageAccount]",
+      "customerToken": "[steps('dataMover').customerToken]",
+      "timeZone": "[steps('dataMover').timeZone]",
+      "dailyRunTime": "[steps('dataMover').dailyRunTime]",
+      "monthlyRunTime": "[steps('dataMover').monthlyRunTime]",
+      "monthlyDayOfMonth": "[steps('dataMover').monthlyDayOfMonth]",
+      "catchupCutoffDay": "[steps('dataMover').catchupCutoffDay]",
+      "identityMode": "[steps('costManagement').identityMode]",
+      "identityName": "[steps('costManagement').identityName]",
+      "deployExports": "[steps('costManagement').deployExports]",
+      "vnetMode": "[if(and(steps('networking').enablePrivateEndpoint, equals(steps('networking').vnet.newOrExisting, 'existing')), 'existing', 'create')]",
+      "vnetName": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.name, '')]",
+      "vnetResourceGroup": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.resourceGroup, '')]",
+      "vnetAddressSpace": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.addressPrefixes, createArray('10.60.0.0/16'))]",
+      "privateEndpointSubnetName": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.subnets.peSubnet.name, 'snet-privateendpoints')]",
+      "privateEndpointSubnetPrefix": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.subnets.peSubnet.addressPrefix, '10.60.1.0/24')]",
+      "privateDnsZoneMode": "[if(steps('networking').enablePrivateEndpoint, steps('networking').privateDnsZoneMode, 'create')]",
+      "existingPrivateDnsZoneId": "[steps('networking').existingPrivateDnsZoneId]"
+    }
+  }
+}

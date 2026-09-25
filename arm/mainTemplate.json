@@ -1,0 +1,2063 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.45.15.27210",
+      "templateHash": "472214112409330697"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for everything in this deployment."
+      }
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "costmgmt",
+      "minLength": 3,
+      "maxLength": 14,
+      "metadata": {
+        "description": "Prefix for the storage account. Lowercase alphanumeric, 3-14 chars - a random suffix gets appended."
+      }
+    },
+    "exportPrefix": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Prefix stuck on the front of each export name. Defaults to namePrefix."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to every resource this template creates."
+      }
+    },
+    "baseTime": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-ddTHH:mm:ssZ')]",
+      "metadata": {
+        "description": "Pin this to a fixed RFC3339 timestamp on redeploys so the export schedule windows do not churn. Leave alone for a first deploy."
+      }
+    },
+    "billingAccountId": {
+      "type": "string",
+      "metadata": {
+        "description": "MCA billing account ID. Used to build the billing profile scope path."
+      }
+    },
+    "billingProfileId": {
+      "type": "string",
+      "metadata": {
+        "description": "MCA billing profile ID - the scope every export runs against."
+      }
+    },
+    "identityMode": {
+      "type": "string",
+      "defaultValue": "existing",
+      "allowedValues": [
+        "create",
+        "existing"
+      ],
+      "metadata": {
+        "description": "Create a new managed identity for the export script, or point at one that already exists."
+      }
+    },
+    "exportScriptIdentityId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of a user-assigned managed identity that already holds the billing profile grant. Required when identityMode is existing."
+      }
+    },
+    "identityName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Name for the managed identity when identityMode is create. Blank falls back to mi-<namePrefix>-exports."
+      }
+    },
+    "deployExports": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create the cost management exports. Leave false on the first pass of a create-identity deploy - the new identity has no billing permission yet, so the export script would fail. Grant it, then redeploy with this on."
+      }
+    },
+    "focusDatasetVersion": {
+      "type": "string",
+      "defaultValue": "1.2-preview",
+      "allowedValues": [
+        "1.2-preview",
+        "1.0r2"
+      ],
+      "metadata": {
+        "description": "FOCUS dataset schema version for the exports."
+      }
+    },
+    "exportFormat": {
+      "type": "string",
+      "defaultValue": "Parquet",
+      "allowedValues": [
+        "Parquet",
+        "Csv"
+      ],
+      "metadata": {
+        "description": "File format for every export. Parquet is smaller and faster to query; Csv is easier to eyeball."
+      }
+    },
+    "compressionMode": {
+      "type": "string",
+      "defaultValue": "snappy",
+      "allowedValues": [
+        "snappy",
+        "gzip",
+        "none"
+      ],
+      "metadata": {
+        "description": "Compression applied at delivery. snappy pairs with Parquet, gzip with Csv, or none."
+      }
+    },
+    "partitionData": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Split large exports into multiple files with a manifest. Keep true for anything above a trivial spend."
+      }
+    },
+    "dataOverwriteBehavior": {
+      "type": "string",
+      "defaultValue": "OverwritePreviousReport",
+      "allowedValues": [
+        "OverwritePreviousReport",
+        "CreateNewReport"
+      ],
+      "metadata": {
+        "description": "OverwritePreviousReport keeps one current file set per month. CreateNewReport appends a new timestamped drop each run."
+      }
+    },
+    "scheduleYears": {
+      "type": "int",
+      "defaultValue": 10,
+      "metadata": {
+        "description": "How far out to set the recurrence end date on the scheduled exports."
+      }
+    },
+    "onetimeLookbackDays": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 31,
+      "metadata": {
+        "description": "How far back the one-time export reaches when the explicit dates are not set. One day by default, 31 max."
+      }
+    },
+    "onetimeExportFrom": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Start of the one-time export window, UTC (e.g. 2026-01-01T00:00:00Z). Empty falls back to onetimeLookbackDays."
+      }
+    },
+    "onetimeExportTo": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "End of the one-time export window, UTC. Empty uses the deployment anchor date. Window cannot exceed a calendar month."
+      }
+    },
+    "containerName": {
+      "type": "string",
+      "defaultValue": "cost-exports",
+      "metadata": {
+        "description": "Blob container the exports get written into."
+      }
+    },
+    "accountReplicationType": {
+      "type": "string",
+      "defaultValue": "LRS",
+      "allowedValues": [
+        "LRS",
+        "ZRS",
+        "GRS",
+        "GZRS",
+        "RAGRS"
+      ],
+      "metadata": {
+        "description": "Storage account replication. LRS is usually fine since Azure can regenerate export data."
+      }
+    },
+    "enableHierarchicalNamespace": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Turn the storage account into ADLS Gen2. Set true if Synapse/Databricks/Fabric will read the exports directly."
+      }
+    },
+    "allowedIpRanges": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Optional public IP/CIDR allowlist. Empty list leaves the account open to all networks (still auth-gated)."
+      }
+    },
+    "readerPrincipalIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Object IDs granted Storage Blob Data Reader on the export storage - users, groups, or service principals doing reporting."
+      }
+    },
+    "generateReaderSas": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Emit a read-only container SAS as a template output for tools that cannot use Entra auth."
+      }
+    },
+    "sasLifetimeDays": {
+      "type": "int",
+      "defaultValue": 180,
+      "metadata": {
+        "description": "Lifetime in days of the generated reader SAS."
+      }
+    },
+    "enablePrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create a VNet, private DNS zone, and a blob private endpoint for the export storage. Also flips the storage firewall to Deny by default."
+      }
+    },
+    "vnetMode": {
+      "type": "string",
+      "defaultValue": "create",
+      "allowedValues": [
+        "create",
+        "existing"
+      ],
+      "metadata": {
+        "description": "Build a new VNet/subnet for the private endpoint, or drop it into one that already exists."
+      }
+    },
+    "vnetName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "VNet name. The one to create, or the existing one to use."
+      }
+    },
+    "vnetResourceGroup": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group holding the existing VNet. Ignored when vnetMode is create."
+      }
+    },
+    "privateDnsZoneMode": {
+      "type": "string",
+      "defaultValue": "create",
+      "allowedValues": [
+        "create",
+        "existing"
+      ],
+      "metadata": {
+        "description": "Create the privatelink.blob.core.windows.net zone, or use one that already exists. A VNet can only be linked to one zone of a given name, so pick existing if the target VNet already has one."
+      }
+    },
+    "existingPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an existing privatelink.blob.core.windows.net zone. Required when privateDnsZoneMode is existing."
+      }
+    },
+    "vnetAddressSpace": {
+      "type": "array",
+      "defaultValue": [
+        "10.60.0.0/16"
+      ],
+      "metadata": {
+        "description": "Address space for the private endpoint VNet."
+      }
+    },
+    "privateEndpointSubnetName": {
+      "type": "string",
+      "defaultValue": "snet-privateendpoints",
+      "metadata": {
+        "description": "Subnet the private endpoint NIC lands in."
+      }
+    },
+    "privateEndpointSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.60.1.0/24",
+      "metadata": {
+        "description": "CIDR for the private endpoint subnet. Must sit inside vnetAddressSpace."
+      }
+    },
+    "deployDataFactory": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy the Data Factory mover half. Set false to stand up cost management exports only."
+      }
+    },
+    "siteName": {
+      "type": "string",
+      "metadata": {
+        "description": "Site name - drives the ADF resource names and the destination container on the customer account."
+      }
+    },
+    "customerStorageAccount": {
+      "type": "string",
+      "metadata": {
+        "description": "Customer storage account name the exports get mirrored into."
+      }
+    },
+    "customerToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "SAS token for the customer storage account. Needs rwdlac on blob service."
+      }
+    },
+    "dailyRunTime": {
+      "type": "string",
+      "defaultValue": "02:00",
+      "metadata": {
+        "description": "Daily trigger run time, HH:mm in timeZone."
+      }
+    },
+    "monthlyRunTime": {
+      "type": "string",
+      "defaultValue": "02:00",
+      "metadata": {
+        "description": "Monthly trigger run time, HH:mm in timeZone."
+      }
+    },
+    "monthlyDayOfMonth": {
+      "type": "int",
+      "defaultValue": 6,
+      "minValue": 1,
+      "maxValue": 28,
+      "metadata": {
+        "description": "Day of month the monthly trigger fires."
+      }
+    },
+    "catchupCutoffDay": {
+      "type": "int",
+      "defaultValue": 5,
+      "minValue": 1,
+      "maxValue": 28,
+      "metadata": {
+        "description": "Integer N used in (today - N) to work out which month folder to mirror. With N=5, runs on the 1st-5th still target last month."
+      }
+    },
+    "timeZone": {
+      "type": "string",
+      "defaultValue": "Eastern Standard Time",
+      "metadata": {
+        "description": "Windows time zone ID the triggers and the pipeline date math run in."
+      }
+    }
+  },
+  "variables": {
+    "effectiveExportPrefix": "[if(empty(parameters('exportPrefix')), parameters('namePrefix'), parameters('exportPrefix'))]",
+    "billingProfileScopeId": "[format('/providers/Microsoft.Billing/billingAccounts/{0}/billingProfiles/{1}', parameters('billingAccountId'), parameters('billingProfileId'))]",
+    "storageAccountName": "[format('{0}{1}', parameters('namePrefix'), substring(uniqueString(resourceGroup().id), 0, 6))]",
+    "onetimeFrom": "[if(empty(parameters('onetimeExportFrom')), dateTimeAdd(parameters('baseTime'), format('-P{0}D', parameters('onetimeLookbackDays')), 'yyyy-MM-ddT00:00:00Z'), parameters('onetimeExportFrom'))]",
+    "onetimeTo": "[if(empty(parameters('onetimeExportTo')), dateTimeAdd(parameters('baseTime'), 'P0D', 'yyyy-MM-ddT00:00:00Z'), parameters('onetimeExportTo'))]",
+    "scheduleFrom": "[dateTimeAdd(parameters('baseTime'), 'P1D', 'yyyy-MM-ddTHH:mm:ssZ')]",
+    "scheduleTo": "[dateTimeAdd(parameters('baseTime'), format('P{0}Y', parameters('scheduleYears')), 'yyyy-MM-ddTHH:mm:ssZ')]",
+    "dailySourcePath": "[format('focus-daily/{0}-focus-daily', variables('effectiveExportPrefix'))]",
+    "monthlySourcePath": "[format('focus-monthly/{0}-focus-monthly', variables('effectiveExportPrefix'))]",
+    "effectiveIdentityId": "[if(equals(parameters('identityMode'), 'create'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))), parameters('exportScriptIdentityId'))]"
+  },
+  "resources": [
+    {
+      "condition": "[equals(parameters('identityMode'), 'create')]",
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-cost-storage",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "storageAccountName": {
+            "value": "[variables('storageAccountName')]"
+          },
+          "containerName": {
+            "value": "[parameters('containerName')]"
+          },
+          "accountReplicationType": {
+            "value": "[parameters('accountReplicationType')]"
+          },
+          "enableHierarchicalNamespace": {
+            "value": "[parameters('enableHierarchicalNamespace')]"
+          },
+          "allowedIpRanges": {
+            "value": "[parameters('allowedIpRanges')]"
+          },
+          "readerPrincipalIds": {
+            "value": "[parameters('readerPrincipalIds')]"
+          },
+          "enablePrivateEndpoint": {
+            "value": "[parameters('enablePrivateEndpoint')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "4355774071120974871"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "storageAccountName": {
+              "type": "string"
+            },
+            "containerName": {
+              "type": "string"
+            },
+            "accountReplicationType": {
+              "type": "string"
+            },
+            "enableHierarchicalNamespace": {
+              "type": "bool"
+            },
+            "allowedIpRanges": {
+              "type": "array"
+            },
+            "readerPrincipalIds": {
+              "type": "array"
+            },
+            "enablePrivateEndpoint": {
+              "type": "bool"
+            }
+          },
+          "variables": {
+            "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-05-01",
+              "name": "[parameters('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "StorageV2",
+              "sku": {
+                "name": "[format('Standard_{0}', parameters('accountReplicationType'))]"
+              },
+              "properties": {
+                "accessTier": "Hot",
+                "isHnsEnabled": "[parameters('enableHierarchicalNamespace')]",
+                "publicNetworkAccess": "Enabled",
+                "allowBlobPublicAccess": false,
+                "allowSharedKeyAccess": true,
+                "supportsHttpsTrafficOnly": true,
+                "minimumTlsVersion": "TLS1_2",
+                "networkAcls": {
+                  "copy": [
+                    {
+                      "name": "ipRules",
+                      "count": "[length(parameters('allowedIpRanges'))]",
+                      "input": {
+                        "value": "[parameters('allowedIpRanges')[copyIndex('ipRules')]]",
+                        "action": "Allow"
+                      }
+                    }
+                  ],
+                  "defaultAction": "[if(or(parameters('enablePrivateEndpoint'), greater(length(parameters('allowedIpRanges')), 0)), 'Deny', 'Allow')]",
+                  "bypass": "AzureServices",
+                  "virtualNetworkRules": []
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('containerName'))]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "readers",
+                "count": "[length(parameters('readerPrincipalIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('readerPrincipalIds')[copyIndex()], variables('storageBlobDataReaderRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]",
+                "principalId": "[parameters('readerPrincipalIds')[copyIndex()]]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "storageAccountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+            },
+            "storageAccountName": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            },
+            "primaryBlobEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-05-01').primaryEndpoints.blob]"
+            },
+            "containerName": {
+              "type": "string",
+              "value": "[parameters('containerName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('enablePrivateEndpoint')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-cost-network",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "namePrefix": {
+            "value": "[parameters('namePrefix')]"
+          },
+          "vnetMode": {
+            "value": "[parameters('vnetMode')]"
+          },
+          "vnetName": "[if(empty(parameters('vnetName')), createObject('value', format('vnet-{0}', parameters('namePrefix'))), createObject('value', parameters('vnetName')))]",
+          "vnetResourceGroup": "[if(empty(parameters('vnetResourceGroup')), createObject('value', resourceGroup().name), createObject('value', parameters('vnetResourceGroup')))]",
+          "vnetAddressSpace": {
+            "value": "[parameters('vnetAddressSpace')]"
+          },
+          "subnetName": {
+            "value": "[parameters('privateEndpointSubnetName')]"
+          },
+          "subnetPrefix": {
+            "value": "[parameters('privateEndpointSubnetPrefix')]"
+          },
+          "privateDnsZoneMode": {
+            "value": "[parameters('privateDnsZoneMode')]"
+          },
+          "existingPrivateDnsZoneId": {
+            "value": "[parameters('existingPrivateDnsZoneId')]"
+          },
+          "storageAccountId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountId.value]"
+          },
+          "storageAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountName.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "12942323234097875662"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "namePrefix": {
+              "type": "string"
+            },
+            "vnetMode": {
+              "type": "string",
+              "allowedValues": [
+                "create",
+                "existing"
+              ]
+            },
+            "vnetName": {
+              "type": "string"
+            },
+            "vnetResourceGroup": {
+              "type": "string",
+              "metadata": {
+                "description": "RG holding the existing VNet. Ignored when vnetMode is create."
+              }
+            },
+            "vnetAddressSpace": {
+              "type": "array"
+            },
+            "subnetName": {
+              "type": "string"
+            },
+            "subnetPrefix": {
+              "type": "string"
+            },
+            "privateDnsZoneMode": {
+              "type": "string",
+              "allowedValues": [
+                "create",
+                "existing"
+              ]
+            },
+            "existingPrivateDnsZoneId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of an existing privatelink.blob.core.windows.net zone. Only read when privateDnsZoneMode is existing."
+              }
+            },
+            "storageAccountId": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "vnetId": "[if(equals(parameters('vnetMode'), 'create'), resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName')), resourceId(parameters('vnetResourceGroup'), 'Microsoft.Network/virtualNetworks', parameters('vnetName')))]",
+            "subnetId": "[if(equals(parameters('vnetMode'), 'create'), resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('subnetName')), resourceId(parameters('vnetResourceGroup'), 'Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), parameters('subnetName')))]",
+            "dnsZoneId": "[if(equals(parameters('privateDnsZoneMode'), 'create'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net'), parameters('existingPrivateDnsZoneId'))]"
+          },
+          "resources": [
+            {
+              "condition": "[equals(parameters('vnetMode'), 'create')]",
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-11-01",
+              "name": "[parameters('vnetName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": "[parameters('vnetAddressSpace')]"
+                },
+                "subnets": [
+                  {
+                    "name": "[parameters('subnetName')]",
+                    "properties": {
+                      "addressPrefix": "[parameters('subnetPrefix')]",
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "condition": "[equals(parameters('privateDnsZoneMode'), 'create')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2020-06-01",
+              "name": "privatelink.blob.core.windows.net",
+              "location": "global",
+              "tags": "[parameters('tags')]"
+            },
+            {
+              "condition": "[equals(parameters('privateDnsZoneMode'), 'create')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2020-06-01",
+              "name": "[format('{0}/{1}', 'privatelink.blob.core.windows.net', format('link-{0}', parameters('namePrefix')))]",
+              "location": "global",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[variables('vnetId')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net')]",
+                "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-11-01",
+              "name": "[format('pe-{0}-blob', parameters('storageAccountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[variables('subnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('psc-{0}-blob', parameters('storageAccountName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "blob"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', parameters('vnetName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', format('pe-{0}-blob', parameters('storageAccountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "default",
+                    "properties": {
+                      "privateDnsZoneId": "[variables('dnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.blob.core.windows.net')]",
+                "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-blob', parameters('storageAccountName')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "vnetId": {
+              "type": "string",
+              "value": "[variables('vnetId')]"
+            },
+            "vnetName": {
+              "type": "string",
+              "value": "[parameters('vnetName')]"
+            },
+            "subnetId": {
+              "type": "string",
+              "value": "[variables('subnetId')]"
+            },
+            "subnetName": {
+              "type": "string",
+              "value": "[parameters('subnetName')]"
+            },
+            "privateEndpointId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-blob', parameters('storageAccountName')))]"
+            },
+            "privateEndpointIp": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-blob', parameters('storageAccountName'))), '2023-11-01').customDnsConfigs[0].ipAddresses[0]]"
+            },
+            "privateDnsZoneId": {
+              "type": "string",
+              "value": "[variables('dnsZoneId')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployExports')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-cost-exports",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "scriptIdentityId": {
+            "value": "[variables('effectiveIdentityId')]"
+          },
+          "billingProfileScopeId": {
+            "value": "[variables('billingProfileScopeId')]"
+          },
+          "exportPrefix": {
+            "value": "[variables('effectiveExportPrefix')]"
+          },
+          "storageAccountId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountId.value]"
+          },
+          "containerName": {
+            "value": "[parameters('containerName')]"
+          },
+          "focusDatasetVersion": {
+            "value": "[parameters('focusDatasetVersion')]"
+          },
+          "exportFormat": {
+            "value": "[parameters('exportFormat')]"
+          },
+          "compressionMode": {
+            "value": "[parameters('compressionMode')]"
+          },
+          "partitionData": {
+            "value": "[parameters('partitionData')]"
+          },
+          "dataOverwriteBehavior": {
+            "value": "[parameters('dataOverwriteBehavior')]"
+          },
+          "onetimeFrom": {
+            "value": "[variables('onetimeFrom')]"
+          },
+          "onetimeTo": {
+            "value": "[variables('onetimeTo')]"
+          },
+          "scheduleFrom": {
+            "value": "[variables('scheduleFrom')]"
+          },
+          "scheduleTo": {
+            "value": "[variables('scheduleTo')]"
+          },
+          "forceUpdateTag": {
+            "value": "[parameters('baseTime')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "8985461875963939143"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "scriptIdentityId": {
+              "type": "string"
+            },
+            "billingProfileScopeId": {
+              "type": "string"
+            },
+            "exportPrefix": {
+              "type": "string"
+            },
+            "storageAccountId": {
+              "type": "string"
+            },
+            "containerName": {
+              "type": "string"
+            },
+            "focusDatasetVersion": {
+              "type": "string"
+            },
+            "exportFormat": {
+              "type": "string"
+            },
+            "compressionMode": {
+              "type": "string"
+            },
+            "partitionData": {
+              "type": "bool"
+            },
+            "dataOverwriteBehavior": {
+              "type": "string"
+            },
+            "onetimeFrom": {
+              "type": "string"
+            },
+            "onetimeTo": {
+              "type": "string"
+            },
+            "scheduleFrom": {
+              "type": "string"
+            },
+            "scheduleTo": {
+              "type": "string"
+            },
+            "forceUpdateTag": {
+              "type": "string",
+              "metadata": {
+                "description": "Changing this re-runs the script. Wired to the deployment anchor."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Resources/deploymentScripts",
+              "apiVersion": "2023-08-01",
+              "name": "create-focus-exports",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "AzureCLI",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('scriptIdentityId'))]": {}
+                }
+              },
+              "properties": {
+                "azCliVersion": "2.61.0",
+                "retentionInterval": "PT4H",
+                "timeout": "PT30M",
+                "cleanupPreference": "OnSuccess",
+                "forceUpdateTag": "[parameters('forceUpdateTag')]",
+                "environmentVariables": [
+                  {
+                    "name": "SCOPE",
+                    "value": "[parameters('billingProfileScopeId')]"
+                  },
+                  {
+                    "name": "EXPORT_PREFIX",
+                    "value": "[parameters('exportPrefix')]"
+                  },
+                  {
+                    "name": "STORAGE_ACCOUNT_ID",
+                    "value": "[parameters('storageAccountId')]"
+                  },
+                  {
+                    "name": "CONTAINER_NAME",
+                    "value": "[parameters('containerName')]"
+                  },
+                  {
+                    "name": "DATASET_VERSION",
+                    "value": "[parameters('focusDatasetVersion')]"
+                  },
+                  {
+                    "name": "EXPORT_FORMAT",
+                    "value": "[parameters('exportFormat')]"
+                  },
+                  {
+                    "name": "COMPRESSION_MODE",
+                    "value": "[parameters('compressionMode')]"
+                  },
+                  {
+                    "name": "PARTITION_DATA",
+                    "value": "[string(parameters('partitionData'))]"
+                  },
+                  {
+                    "name": "DATA_OVERWRITE",
+                    "value": "[parameters('dataOverwriteBehavior')]"
+                  },
+                  {
+                    "name": "ONETIME_FROM",
+                    "value": "[parameters('onetimeFrom')]"
+                  },
+                  {
+                    "name": "ONETIME_TO",
+                    "value": "[parameters('onetimeTo')]"
+                  },
+                  {
+                    "name": "SCHEDULE_FROM",
+                    "value": "[parameters('scheduleFrom')]"
+                  },
+                  {
+                    "name": "SCHEDULE_TO",
+                    "value": "[parameters('scheduleTo')]"
+                  },
+                  {
+                    "name": "EXPORT_LOCATION",
+                    "value": "[parameters('location')]"
+                  }
+                ],
+                "scriptContent": "set -euo pipefail\nAPI=\"2025-03-01\"\nBASE=\"https://management.azure.com${SCOPE}/providers/Microsoft.CostManagement/exports\"\n\n# one-time export window sanity check - the API caps a Custom timeframe at a\n# calendar month and silently does odd things past that.\nFROM_S=$(date -u -d \"$ONETIME_FROM\" +%s)\nTO_S=$(date -u -d \"$ONETIME_TO\" +%s)\nif [ \"$TO_S\" -le \"$FROM_S\" ]; then\n  echo \"ERROR: onetime window must run forwards ($ONETIME_FROM -> $ONETIME_TO)\" >&2\n  exit 1\nfi\nif [ $(( TO_S - FROM_S )) -gt 2678400 ]; then\n  echo \"ERROR: onetime window can't be longer than 31 days\" >&2\n  exit 1\nfi\n\n# put_export <key> <timeframe> <recurrence|\"\"> <status> <rootFolder> <description>\nput_export() {\n  key=\"$1\"; timeframe=\"$2\"; recurrence=\"$3\"; status=\"$4\"; folder=\"$5\"; desc=\"$6\"\n  name=\"${EXPORT_PREFIX}-${key}\"\n\n  definition=$(jq -n --arg tf \"$timeframe\" --arg dv \"$DATASET_VERSION\" \\\n    '{type:\"FocusCost\", timeframe:$tf, dataSet:{granularity:\"Daily\", configuration:{dataVersion:$dv}}}')\n\n  # timePeriod only goes on the Custom (one-time) export\n  if [ \"$timeframe\" = \"Custom\" ]; then\n    definition=$(echo \"$definition\" | jq --arg f \"$ONETIME_FROM\" --arg t \"$ONETIME_TO\" \\\n      '. + {timePeriod:{from:$f, to:$t}}')\n  fi\n\n  # One-time exports take status and NOTHING else - the API rejects a\n  # recurrence member even when it's null, so we leave the keys off entirely.\n  if [ -z \"$recurrence\" ]; then\n    schedule=$(jq -n --arg s \"$status\" '{status:$s}')\n  else\n    schedule=$(jq -n --arg s \"$status\" --arg r \"$recurrence\" --arg f \"$SCHEDULE_FROM\" --arg t \"$SCHEDULE_TO\" \\\n      '{status:$s, recurrence:$r, recurrencePeriod:{from:$f, to:$t}}')\n  fi\n\n  body=$(jq -n \\\n    --arg loc \"$EXPORT_LOCATION\" --arg d \"$desc\" --arg fmt \"$EXPORT_FORMAT\" \\\n    --arg cm \"$COMPRESSION_MODE\" --argjson pd \"$PARTITION_DATA\" --arg dob \"$DATA_OVERWRITE\" \\\n    --arg sa \"$STORAGE_ACCOUNT_ID\" --arg c \"$CONTAINER_NAME\" --arg rf \"$folder\" \\\n    --argjson def \"$definition\" --argjson sched \"$schedule\" \\\n    '{\n      identity: {type:\"SystemAssigned\"},\n      location: $loc,\n      properties: {\n        exportDescription: $d,\n        format: $fmt,\n        compressionMode: $cm,\n        partitionData: $pd,\n        dataOverwriteBehavior: $dob,\n        definition: $def,\n        deliveryInfo: {destination: {type:\"AzureBlob\", resourceId:$sa, container:$c, rootFolderPath:$rf}},\n        schedule: $sched\n      }\n    }')\n\n  echo \"PUT $name (root=$folder, timeframe=$timeframe, recurrence=${recurrence:-none})\"\n  az rest --method put --url \"${BASE}/${name}?api-version=${API}\" \\\n    --headers \"Content-Type=application/json\" --body \"$body\" > \"/tmp/${name}.json\"\n\n  # principalId is sometimes not on the PUT response yet, so poll the GET\n  pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n  tries=0\n  while [ -z \"$pid\" ] && [ \"$tries\" -lt 10 ]; do\n    sleep 5\n    az rest --method get --url \"${BASE}/${name}?api-version=${API}\" > \"/tmp/${name}.json\" || true\n    pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n    tries=$((tries+1))\n  done\n  if [ -z \"$pid\" ]; then\n    echo \"ERROR: no managed identity principalId came back for $name\" >&2\n    exit 1\n  fi\n  echo \"$pid\" >> /tmp/principals.txt\n}\n\n: > /tmp/principals.txt\n\n# All three are FocusCost - only the timeframe and schedule differ. The one-time\n# one has an inactive schedule so it never fires on its own, you kick it off with\n# Run now in the portal or the Execute API.\nput_export \"focus-onetime\" \"Custom\"       \"\"        \"Inactive\" \"focus-onetime\" \"One-time FOCUS cost and usage details\"\nput_export \"focus-daily\"   \"MonthToDate\"  \"Daily\"   \"Active\"   \"focus-daily\"   \"Daily FOCUS cost and usage details, month to date\"\nput_export \"focus-monthly\" \"TheLastMonth\" \"Monthly\" \"Active\"   \"focus-monthly\" \"Monthly FOCUS cost and usage details for last month\"\n\njq -R -s 'split(\"\\n\") | map(select(length > 0))' /tmp/principals.txt \\\n  | jq '{principalIds: .}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n\necho \"done - $(wc -l < /tmp/principals.txt) exports created\"\n"
+              }
+            }
+          ],
+          "outputs": {
+            "exportPrincipalIds": {
+              "type": "array",
+              "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'create-focus-exports'), '2023-08-01').outputs.principalIds]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName')))]",
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployExports')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-export-writers",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "principalIds": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-exports'), '2025-04-01').outputs.exportPrincipalIds.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "16157976775132476695"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
+            },
+            "principalIds": {
+              "type": "array"
+            }
+          },
+          "variables": {
+            "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "writers",
+                "count": "[length(parameters('principalIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalIds')[copyIndex()], variables('storageBlobDataContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]",
+                "principalId": "[parameters('principalIds')[copyIndex()]]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-exports')]",
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage')]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployDataFactory')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-adf",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "siteName": {
+            "value": "[parameters('siteName')]"
+          },
+          "exportStorageAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "exportStorageAccountId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountId.value]"
+          },
+          "exportStorageContainer": {
+            "value": "[parameters('containerName')]"
+          },
+          "dailySourcePath": {
+            "value": "[variables('dailySourcePath')]"
+          },
+          "monthlySourcePath": {
+            "value": "[variables('monthlySourcePath')]"
+          },
+          "customerStorageAccount": {
+            "value": "[parameters('customerStorageAccount')]"
+          },
+          "customerToken": {
+            "value": "[parameters('customerToken')]"
+          },
+          "vnetSubnetId": "[if(parameters('enablePrivateEndpoint'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-network'), '2025-04-01').outputs.subnetId.value), createObject('value', ''))]",
+          "dailyRunTime": {
+            "value": "[parameters('dailyRunTime')]"
+          },
+          "monthlyRunTime": {
+            "value": "[parameters('monthlyRunTime')]"
+          },
+          "monthlyDayOfMonth": {
+            "value": "[parameters('monthlyDayOfMonth')]"
+          },
+          "catchupCutoffDay": {
+            "value": "[parameters('catchupCutoffDay')]"
+          },
+          "timeZone": {
+            "value": "[parameters('timeZone')]"
+          },
+          "scheduleStartTime": {
+            "value": "[parameters('baseTime')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "1185479253885175322"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "siteName": {
+              "type": "string"
+            },
+            "exportStorageAccountName": {
+              "type": "string"
+            },
+            "exportStorageAccountId": {
+              "type": "string"
+            },
+            "exportStorageContainer": {
+              "type": "string"
+            },
+            "dailySourcePath": {
+              "type": "string",
+              "metadata": {
+                "description": "Full prefix under the source container the daily trigger mirrors, e.g. focus-daily/cgcm-focus-daily"
+              }
+            },
+            "monthlySourcePath": {
+              "type": "string",
+              "metadata": {
+                "description": "Full prefix under the source container the monthly trigger mirrors, e.g. focus-monthly/cgcm-focus-monthly"
+              }
+            },
+            "customerStorageAccount": {
+              "type": "string"
+            },
+            "customerToken": {
+              "type": "securestring"
+            },
+            "vnetSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Private endpoint subnet the export storage sits behind. Non-empty flips the factory into managed vnet mode - same test ADF.ps1 did on vnetSubnetId. ADF's own managed private endpoint lives in its managed vnet, not in this subnet; this is a mode flag, not an attachment point."
+              }
+            },
+            "dailyRunTime": {
+              "type": "string"
+            },
+            "monthlyRunTime": {
+              "type": "string"
+            },
+            "monthlyDayOfMonth": {
+              "type": "int"
+            },
+            "catchupCutoffDay": {
+              "type": "int"
+            },
+            "timeZone": {
+              "type": "string"
+            },
+            "scheduleStartTime": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "dataFactoryName": "[format('{0}-adf', parameters('siteName'))]",
+            "pipelineName": "[format('{0}-DataMoverPipeline', parameters('siteName'))]",
+            "dailyTriggerName": "[format('{0}-DailyTrigger', parameters('siteName'))]",
+            "monthlyTriggerName": "[format('{0}-MonthlyTrigger', parameters('siteName'))]",
+            "irName": "[format('{0}-ManagedIR', parameters('siteName'))]",
+            "managedPeName": "[format('{0}-SourceStoragePE', parameters('siteName'))]",
+            "sourceLinkedServiceName": "SourceStorage",
+            "destLinkedServiceName": "DestStorage",
+            "sourceDatasetName": "SourceBlobs",
+            "destDatasetName": "DestBlobs",
+            "destContainerName": "[toLower(parameters('siteName'))]",
+            "usePrivateEndpoint": "[not(empty(parameters('vnetSubnetId')))]",
+            "startTimeIso": "[dateTimeAdd(parameters('scheduleStartTime'), '-PT5M', 'yyyy-MM-ddTHH:mm:ssZ')]",
+            "dailyHour": "[int(split(parameters('dailyRunTime'), ':')[0])]",
+            "dailyMinute": "[int(split(parameters('dailyRunTime'), ':')[1])]",
+            "monthlyHour": "[int(split(parameters('monthlyRunTime'), ':')[0])]",
+            "monthlyMinute": "[int(split(parameters('monthlyRunTime'), ':')[1])]",
+            "sourceRoleIds": [
+              "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+              "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+              "17d1049b-9a84-46fb-8f53-869881c3d3ab"
+            ],
+            "targetDateExpr": "[format('@addDays(convertTimeZone(utcnow(), ''UTC'', ''{0}''), mul(-1, pipeline().parameters.catchupDays))', parameters('timeZone'))]",
+            "dateRangeExpr": "@concat(formatDateTime(startOfMonth(variables('targetDate')), 'yyyyMMdd'), '-', formatDateTime(addDays(addToTime(startOfMonth(variables('targetDate')), 1, 'Month'), -1), 'yyyyMMdd'))",
+            "dateRangeFolderExpr": "@concat(pipeline().parameters.sourceFolderPath, '/', variables('dateRange'))",
+            "logBlobUrlExpr": "[format('@concat(''https://{0}.blob.core.windows.net/logs/{1}-'', pipeline().parameters.mode, ''-'', pipeline().RunId, ''.json?{2}'')', parameters('customerStorageAccount'), parameters('siteName'), parameters('customerToken'))]",
+            "logHeaders": {
+              "x-ms-blob-type": "BlockBlob",
+              "Content-Type": "application/json"
+            },
+            "successBody": {
+              "runId": "@{pipeline().RunId}",
+              "pipeline": "@{pipeline().Pipeline}",
+              "mode": "@{pipeline().parameters.mode}",
+              "sourceFolder": "@{pipeline().parameters.sourceFolderPath}",
+              "dateRange": "@{variables('dateRange')}",
+              "catchupDays": "@{pipeline().parameters.catchupDays}",
+              "triggerTime": "@{string(pipeline().TriggerTime)}",
+              "status": "Succeeded",
+              "guidFoldersCopied": "@{length(activity('FilterSourceGuids').output.Value)}"
+            },
+            "failureBody": {
+              "runId": "@{pipeline().RunId}",
+              "pipeline": "@{pipeline().Pipeline}",
+              "mode": "@{pipeline().parameters.mode}",
+              "sourceFolder": "@{pipeline().parameters.sourceFolderPath}",
+              "dateRange": "@{variables('dateRange')}",
+              "triggerTime": "@{string(pipeline().TriggerTime)}",
+              "status": "Failed",
+              "errorCode": "@{coalesce(activity('CheckDestExists').error.errorCode, activity('DeleteDestFolderIfExists').error.errorCode, activity('ListSourceGuids').error.errorCode, activity('ForEachSourceGuid').error.errorCode)}",
+              "errorMessage": "@{coalesce(activity('CheckDestExists').error.message, activity('DeleteDestFolderIfExists').error.message, activity('ListSourceGuids').error.message, activity('ForEachSourceGuid').error.message)}"
+            },
+            "logErrorBody": {
+              "runId": "@{pipeline().RunId}",
+              "pipeline": "@{pipeline().Pipeline}",
+              "mode": "@{pipeline().parameters.mode}",
+              "triggerTime": "@{string(pipeline().TriggerTime)}",
+              "status": "LoggingError",
+              "errorCode": "@{activity('WriteSuccessLog').error.errorCode}",
+              "errorMessage": "@{activity('WriteSuccessLog').error.message}",
+              "note": "Copy succeeded but the success log write failed"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.DataFactory/factories",
+              "apiVersion": "2018-06-01",
+              "name": "[variables('dataFactoryName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {}
+            },
+            {
+              "copy": {
+                "name": "sourceRoles",
+                "count": "[length(variables('sourceRoleIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('exportStorageAccountName'))]",
+              "name": "[guid(parameters('exportStorageAccountId'), resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName')), variables('sourceRoleIds')[copyIndex()])]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('sourceRoleIds')[copyIndex()])]",
+                "principalId": "[reference(resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName')), '2018-06-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('usePrivateEndpoint')]",
+              "type": "Microsoft.DataFactory/factories/managedVirtualNetworks",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), 'default')]",
+              "properties": {},
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]"
+              ]
+            },
+            {
+              "condition": "[variables('usePrivateEndpoint')]",
+              "type": "Microsoft.DataFactory/factories/integrationRuntimes",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('irName'))]",
+              "properties": {
+                "type": "Managed",
+                "typeProperties": {
+                  "computeProperties": {
+                    "location": "AutoResolve"
+                  }
+                },
+                "managedVirtualNetwork": {
+                  "type": "ManagedVirtualNetworkReference",
+                  "referenceName": "default"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/managedVirtualNetworks', variables('dataFactoryName'), 'default')]"
+              ]
+            },
+            {
+              "condition": "[variables('usePrivateEndpoint')]",
+              "type": "Microsoft.DataFactory/factories/managedVirtualNetworks/managedPrivateEndpoints",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}/{2}', variables('dataFactoryName'), 'default', variables('managedPeName'))]",
+              "properties": {
+                "privateLinkResourceId": "[parameters('exportStorageAccountId')]",
+                "groupId": "blob"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories/managedVirtualNetworks', variables('dataFactoryName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/linkedservices",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('sourceLinkedServiceName'))]",
+              "properties": "[union(createObject('type', 'AzureBlobStorage', 'typeProperties', createObject('serviceEndpoint', format('https://{0}.blob.core.windows.net/', parameters('exportStorageAccountName')))), if(variables('usePrivateEndpoint'), createObject('connectVia', createObject('referenceName', variables('irName'), 'type', 'IntegrationRuntimeReference')), createObject()))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/integrationRuntimes', variables('dataFactoryName'), variables('irName'))]",
+                "sourceRoles"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/linkedservices",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('destLinkedServiceName'))]",
+              "properties": {
+                "type": "AzureBlobStorage",
+                "typeProperties": {
+                  "sasUri": {
+                    "type": "SecureString",
+                    "value": "[format('https://{0}.blob.core.windows.net/?{1}', parameters('customerStorageAccount'), parameters('customerToken'))]"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/datasets",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('sourceDatasetName'))]",
+              "properties": {
+                "type": "Binary",
+                "linkedServiceName": {
+                  "referenceName": "[variables('sourceLinkedServiceName')]",
+                  "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                  "folderPath": {
+                    "type": "String"
+                  }
+                },
+                "typeProperties": {
+                  "location": {
+                    "type": "AzureBlobStorageLocation",
+                    "container": "[parameters('exportStorageContainer')]",
+                    "folderPath": {
+                      "value": "@dataset().folderPath",
+                      "type": "Expression"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/linkedservices', variables('dataFactoryName'), variables('sourceLinkedServiceName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/datasets",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('destDatasetName'))]",
+              "properties": {
+                "type": "Binary",
+                "linkedServiceName": {
+                  "referenceName": "[variables('destLinkedServiceName')]",
+                  "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                  "folderPath": {
+                    "type": "String"
+                  }
+                },
+                "typeProperties": {
+                  "location": {
+                    "type": "AzureBlobStorageLocation",
+                    "container": "[variables('destContainerName')]",
+                    "folderPath": {
+                      "value": "@dataset().folderPath",
+                      "type": "Expression"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories/linkedservices', variables('dataFactoryName'), variables('destLinkedServiceName'))]",
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/pipelines",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('pipelineName'))]",
+              "properties": {
+                "parameters": {
+                  "sourceFolderPath": {
+                    "type": "String",
+                    "defaultValue": "[parameters('dailySourcePath')]"
+                  },
+                  "catchupDays": {
+                    "type": "Int",
+                    "defaultValue": "[parameters('catchupCutoffDay')]"
+                  },
+                  "mode": {
+                    "type": "String",
+                    "defaultValue": "daily"
+                  }
+                },
+                "variables": {
+                  "targetDate": {
+                    "type": "String"
+                  },
+                  "dateRange": {
+                    "type": "String"
+                  },
+                  "dateRangeFolder": {
+                    "type": "String"
+                  }
+                },
+                "activities": [
+                  {
+                    "name": "SetTargetDate",
+                    "type": "SetVariable",
+                    "typeProperties": {
+                      "variableName": "targetDate",
+                      "value": {
+                        "value": "[variables('targetDateExpr')]",
+                        "type": "Expression"
+                      }
+                    }
+                  },
+                  {
+                    "name": "SetDateRange",
+                    "type": "SetVariable",
+                    "dependsOn": [
+                      {
+                        "activity": "SetTargetDate",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "variableName": "dateRange",
+                      "value": {
+                        "value": "[variables('dateRangeExpr')]",
+                        "type": "Expression"
+                      }
+                    }
+                  },
+                  {
+                    "name": "SetDateRangeFolder",
+                    "type": "SetVariable",
+                    "dependsOn": [
+                      {
+                        "activity": "SetDateRange",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "variableName": "dateRangeFolder",
+                      "value": {
+                        "value": "[variables('dateRangeFolderExpr')]",
+                        "type": "Expression"
+                      }
+                    }
+                  },
+                  {
+                    "name": "CheckDestExists",
+                    "type": "GetMetadata",
+                    "dependsOn": [
+                      {
+                        "activity": "SetDateRangeFolder",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "dataset": {
+                        "referenceName": "[variables('destDatasetName')]",
+                        "type": "DatasetReference",
+                        "parameters": {
+                          "folderPath": {
+                            "value": "@variables('dateRangeFolder')",
+                            "type": "Expression"
+                          }
+                        }
+                      },
+                      "fieldList": [
+                        "exists"
+                      ],
+                      "storeSettings": {
+                        "type": "AzureBlobStorageReadSettings",
+                        "recursive": false
+                      },
+                      "formatSettings": {
+                        "type": "BinaryReadSettings"
+                      }
+                    }
+                  },
+                  {
+                    "name": "DeleteDestFolderIfExists",
+                    "type": "IfCondition",
+                    "dependsOn": [
+                      {
+                        "activity": "CheckDestExists",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "expression": {
+                        "value": "@activity('CheckDestExists').output.exists",
+                        "type": "Expression"
+                      },
+                      "ifTrueActivities": [
+                        {
+                          "name": "DeleteDestFolder",
+                          "type": "Delete",
+                          "typeProperties": {
+                            "dataset": {
+                              "referenceName": "[variables('destDatasetName')]",
+                              "type": "DatasetReference",
+                              "parameters": {
+                                "folderPath": {
+                                  "value": "@variables('dateRangeFolder')",
+                                  "type": "Expression"
+                                }
+                              }
+                            },
+                            "enableLogging": false,
+                            "storeSettings": {
+                              "type": "AzureBlobStorageReadSettings",
+                              "recursive": true
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "ListSourceGuids",
+                    "type": "GetMetadata",
+                    "dependsOn": [
+                      {
+                        "activity": "DeleteDestFolderIfExists",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "dataset": {
+                        "referenceName": "[variables('sourceDatasetName')]",
+                        "type": "DatasetReference",
+                        "parameters": {
+                          "folderPath": {
+                            "value": "@variables('dateRangeFolder')",
+                            "type": "Expression"
+                          }
+                        }
+                      },
+                      "fieldList": [
+                        "childItems"
+                      ],
+                      "storeSettings": {
+                        "type": "AzureBlobStorageReadSettings",
+                        "recursive": false
+                      },
+                      "formatSettings": {
+                        "type": "BinaryReadSettings"
+                      }
+                    }
+                  },
+                  {
+                    "name": "FilterSourceGuids",
+                    "type": "Filter",
+                    "dependsOn": [
+                      {
+                        "activity": "ListSourceGuids",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "items": {
+                        "value": "@activity('ListSourceGuids').output.childItems",
+                        "type": "Expression"
+                      },
+                      "condition": {
+                        "value": "@equals(item().type, 'Folder')",
+                        "type": "Expression"
+                      }
+                    }
+                  },
+                  {
+                    "name": "ForEachSourceGuid",
+                    "type": "ForEach",
+                    "dependsOn": [
+                      {
+                        "activity": "FilterSourceGuids",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "items": {
+                        "value": "@activity('FilterSourceGuids').output.Value",
+                        "type": "Expression"
+                      },
+                      "isSequential": true,
+                      "activities": [
+                        {
+                          "name": "CopyGuid",
+                          "type": "Copy",
+                          "inputs": [
+                            {
+                              "referenceName": "[variables('sourceDatasetName')]",
+                              "type": "DatasetReference",
+                              "parameters": {
+                                "folderPath": {
+                                  "value": "@concat(variables('dateRangeFolder'), '/', item().name)",
+                                  "type": "Expression"
+                                }
+                              }
+                            }
+                          ],
+                          "outputs": [
+                            {
+                              "referenceName": "[variables('destDatasetName')]",
+                              "type": "DatasetReference",
+                              "parameters": {
+                                "folderPath": {
+                                  "value": "@concat(variables('dateRangeFolder'), '/', item().name)",
+                                  "type": "Expression"
+                                }
+                              }
+                            }
+                          ],
+                          "typeProperties": {
+                            "source": {
+                              "type": "BinarySource",
+                              "storeSettings": {
+                                "type": "AzureBlobStorageReadSettings",
+                                "recursive": true
+                              }
+                            },
+                            "sink": {
+                              "type": "BinarySink",
+                              "storeSettings": {
+                                "type": "AzureBlobStorageWriteSettings"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "WriteSuccessLog",
+                    "type": "WebActivity",
+                    "dependsOn": [
+                      {
+                        "activity": "ForEachSourceGuid",
+                        "dependencyConditions": [
+                          "Succeeded"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "url": {
+                        "value": "[variables('logBlobUrlExpr')]",
+                        "type": "Expression"
+                      },
+                      "method": "PUT",
+                      "headers": "[variables('logHeaders')]",
+                      "body": "[variables('successBody')]"
+                    }
+                  },
+                  {
+                    "name": "WriteFailureLog",
+                    "type": "WebActivity",
+                    "dependsOn": [
+                      {
+                        "activity": "ForEachSourceGuid",
+                        "dependencyConditions": [
+                          "Failed",
+                          "Skipped"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "url": {
+                        "value": "[variables('logBlobUrlExpr')]",
+                        "type": "Expression"
+                      },
+                      "method": "PUT",
+                      "headers": "[variables('logHeaders')]",
+                      "body": "[variables('failureBody')]"
+                    }
+                  },
+                  {
+                    "name": "WriteLogError",
+                    "type": "WebActivity",
+                    "dependsOn": [
+                      {
+                        "activity": "WriteSuccessLog",
+                        "dependencyConditions": [
+                          "Failed"
+                        ]
+                      }
+                    ],
+                    "typeProperties": {
+                      "url": {
+                        "value": "[variables('logBlobUrlExpr')]",
+                        "type": "Expression"
+                      },
+                      "method": "PUT",
+                      "headers": "[variables('logHeaders')]",
+                      "body": "[variables('logErrorBody')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories/datasets', variables('dataFactoryName'), variables('destDatasetName'))]",
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/datasets', variables('dataFactoryName'), variables('sourceDatasetName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/triggers",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('dailyTriggerName'))]",
+              "properties": {
+                "type": "ScheduleTrigger",
+                "typeProperties": {
+                  "recurrence": {
+                    "frequency": "Day",
+                    "interval": 1,
+                    "startTime": "[variables('startTimeIso')]",
+                    "timeZone": "[parameters('timeZone')]",
+                    "schedule": {
+                      "hours": [
+                        "[variables('dailyHour')]"
+                      ],
+                      "minutes": [
+                        "[variables('dailyMinute')]"
+                      ]
+                    }
+                  }
+                },
+                "pipelines": [
+                  {
+                    "pipelineReference": {
+                      "referenceName": "[variables('pipelineName')]",
+                      "type": "PipelineReference"
+                    },
+                    "parameters": {
+                      "sourceFolderPath": "[parameters('dailySourcePath')]",
+                      "catchupDays": "[parameters('catchupCutoffDay')]",
+                      "mode": "daily"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/triggers",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('monthlyTriggerName'))]",
+              "properties": {
+                "type": "ScheduleTrigger",
+                "typeProperties": {
+                  "recurrence": {
+                    "frequency": "Month",
+                    "interval": 1,
+                    "startTime": "[variables('startTimeIso')]",
+                    "timeZone": "[parameters('timeZone')]",
+                    "schedule": {
+                      "monthDays": [
+                        "[parameters('monthlyDayOfMonth')]"
+                      ],
+                      "hours": [
+                        "[variables('monthlyHour')]"
+                      ],
+                      "minutes": [
+                        "[variables('monthlyMinute')]"
+                      ]
+                    }
+                  }
+                },
+                "pipelines": [
+                  {
+                    "pipelineReference": {
+                      "referenceName": "[variables('pipelineName')]",
+                      "type": "PipelineReference"
+                    },
+                    "parameters": {
+                      "sourceFolderPath": "[parameters('monthlySourcePath')]",
+                      "catchupDays": "[parameters('catchupCutoffDay')]",
+                      "mode": "monthly"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "dataFactoryName": {
+              "type": "string",
+              "value": "[variables('dataFactoryName')]"
+            },
+            "dataFactoryId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]"
+            },
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName')), '2018-06-01', 'full').identity.principalId]"
+            },
+            "pipelineName": {
+              "type": "string",
+              "value": "[variables('pipelineName')]"
+            },
+            "dailyTriggerName": {
+              "type": "string",
+              "value": "[variables('dailyTriggerName')]"
+            },
+            "monthlyTriggerName": {
+              "type": "string",
+              "value": "[variables('monthlyTriggerName')]"
+            },
+            "destContainerName": {
+              "type": "string",
+              "value": "[variables('destContainerName')]"
+            },
+            "integrationRuntimeName": {
+              "type": "string",
+              "value": "[if(variables('usePrivateEndpoint'), variables('irName'), 'AutoResolveIntegrationRuntime')]"
+            },
+            "managedPrivateEndpointName": {
+              "type": "string",
+              "value": "[if(variables('usePrivateEndpoint'), variables('managedPeName'), '')]"
+            },
+            "vnetSubnetId": {
+              "type": "string",
+              "value": "[parameters('vnetSubnetId')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-network')]",
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[resourceGroup().name]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountName.value]"
+    },
+    "storageAccountId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.storageAccountId.value]"
+    },
+    "containerName": {
+      "type": "string",
+      "value": "[parameters('containerName')]"
+    },
+    "containerUrl": {
+      "type": "string",
+      "value": "[format('{0}{1}', reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.primaryBlobEndpoint.value, parameters('containerName'))]"
+    },
+    "billingProfileScopeId": {
+      "type": "string",
+      "value": "[variables('billingProfileScopeId')]"
+    },
+    "exportNames": {
+      "type": "object",
+      "value": {
+        "onetime": "[format('{0}-focus-onetime', variables('effectiveExportPrefix'))]",
+        "daily": "[format('{0}-focus-daily', variables('effectiveExportPrefix'))]",
+        "monthly": "[format('{0}-focus-monthly', variables('effectiveExportPrefix'))]"
+      }
+    },
+    "exportPrincipalIds": {
+      "type": "array",
+      "value": "[if(parameters('deployExports'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-exports'), '2025-04-01').outputs.exportPrincipalIds.value, createArray())]"
+    },
+    "exportsDeployed": {
+      "type": "bool",
+      "value": "[parameters('deployExports')]"
+    },
+    "exportIdentityId": {
+      "type": "string",
+      "value": "[variables('effectiveIdentityId')]"
+    },
+    "exportIdentityName": {
+      "type": "string",
+      "value": "[if(equals(parameters('identityMode'), 'create'), if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName')), '')]"
+    },
+    "exportIdentityPrincipalId": {
+      "type": "string",
+      "value": "[if(equals(parameters('identityMode'), 'create'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))), '2023-01-31').principalId, '')]"
+    },
+    "nextStep": {
+      "type": "string",
+      "value": "[if(and(equals(parameters('identityMode'), 'create'), not(parameters('deployExports'))), format('Grant principal {0} the billing role on {1}, then redeploy with deployExports=true.', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))), '2023-01-31').principalId, variables('billingProfileScopeId')), '')]"
+    },
+    "dailySourcePath": {
+      "type": "string",
+      "value": "[variables('dailySourcePath')]"
+    },
+    "monthlySourcePath": {
+      "type": "string",
+      "value": "[variables('monthlySourcePath')]"
+    },
+    "vnetId": {
+      "type": "string",
+      "value": "[if(parameters('enablePrivateEndpoint'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-network'), '2025-04-01').outputs.vnetId.value, '')]"
+    },
+    "vnetName": {
+      "type": "string",
+      "value": "[if(parameters('enablePrivateEndpoint'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-network'), '2025-04-01').outputs.vnetName.value, '')]"
+    },
+    "privateEndpointSubnetId": {
+      "type": "string",
+      "value": "[if(parameters('enablePrivateEndpoint'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-network'), '2025-04-01').outputs.subnetId.value, '')]"
+    },
+    "privateEndpointIp": {
+      "type": "string",
+      "value": "[if(parameters('enablePrivateEndpoint'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-network'), '2025-04-01').outputs.privateEndpointIp.value, '')]"
+    },
+    "privateDnsZoneId": {
+      "type": "string",
+      "value": "[if(parameters('enablePrivateEndpoint'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-network'), '2025-04-01').outputs.privateDnsZoneId.value, '')]"
+    },
+    "dataFactoryName": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, '')]"
+    },
+    "dataFactoryPrincipalId": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.principalId.value, '')]"
+    },
+    "pipelineName": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.pipelineName.value, '')]"
+    },
+    "dailyTriggerName": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dailyTriggerName.value, '')]"
+    },
+    "monthlyTriggerName": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.monthlyTriggerName.value, '')]"
+    },
+    "destinationContainer": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.destContainerName.value, '')]"
+    },
+    "startTriggersCommand": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), format('az datafactory trigger start -g {0} --factory-name {1} -n {2}; az datafactory trigger start -g {3} --factory-name {4} -n {5}', resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dailyTriggerName.value, resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.monthlyTriggerName.value), '')]"
+    },
+    "readerSasToken": {
+      "type": "string",
+      "value": "[if(parameters('generateReaderSas'), listServiceSas(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-05-01', createObject('canonicalizedResource', format('/blob/{0}/{1}', variables('storageAccountName'), parameters('containerName')), 'signedResource', 'c', 'signedPermission', 'rl', 'signedProtocol', 'https', 'signedExpiry', dateTimeAdd(parameters('baseTime'), format('P{0}D', parameters('sasLifetimeDays')), 'yyyy-MM-ddTHH:mm:ssZ'))).serviceSasToken, '')]"
+    }
+  }
+}
