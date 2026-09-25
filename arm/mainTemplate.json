@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "472214112409330697"
+      "templateHash": "13992016942996276699"
     }
   },
   "parameters": {
@@ -423,6 +423,12 @@
           },
           "enablePrivateEndpoint": {
             "value": "[parameters('enablePrivateEndpoint')]"
+          },
+          "generateReaderSas": {
+            "value": "[parameters('generateReaderSas')]"
+          },
+          "readerSasExpiry": {
+            "value": "[dateTimeAdd(parameters('baseTime'), format('P{0}D', parameters('sasLifetimeDays')), 'yyyy-MM-ddTHH:mm:ssZ')]"
           }
         },
         "template": {
@@ -432,7 +438,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "4355774071120974871"
+              "templateHash": "12347626363008748834"
             }
           },
           "parameters": {
@@ -462,6 +468,12 @@
             },
             "enablePrivateEndpoint": {
               "type": "bool"
+            },
+            "generateReaderSas": {
+              "type": "bool"
+            },
+            "readerSasExpiry": {
+              "type": "string"
             }
           },
           "variables": {
@@ -556,6 +568,10 @@
             "containerName": {
               "type": "string",
               "value": "[parameters('containerName')]"
+            },
+            "readerSasToken": {
+              "type": "string",
+              "value": "[if(parameters('generateReaderSas'), listServiceSas(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-05-01', createObject('canonicalizedResource', format('/blob/{0}/{1}', parameters('storageAccountName'), parameters('containerName')), 'signedResource', 'c', 'signedPermission', 'rl', 'signedProtocol', 'https', 'signedExpiry', parameters('readerSasExpiry'))).serviceSasToken, '')]"
             }
           }
         }
@@ -2057,7 +2073,7 @@
     },
     "readerSasToken": {
       "type": "string",
-      "value": "[if(parameters('generateReaderSas'), listServiceSas(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-05-01', createObject('canonicalizedResource', format('/blob/{0}/{1}', variables('storageAccountName'), parameters('containerName')), 'signedResource', 'c', 'signedPermission', 'rl', 'signedProtocol', 'https', 'signedExpiry', dateTimeAdd(parameters('baseTime'), format('P{0}D', parameters('sasLifetimeDays')), 'yyyy-MM-ddTHH:mm:ssZ'))).serviceSasToken, '')]"
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.readerSasToken.value]"
     }
   }
 }
