@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "15061707123202419753"
+      "templateHash": "8628536668082600372"
     }
   },
   "parameters": {
@@ -895,7 +895,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "8674245220586554384"
+              "templateHash": "1046481365985120418"
             }
           },
           "parameters": {
@@ -1005,7 +1005,7 @@
                   },
                   {
                     "name": "PARTITION_DATA",
-                    "value": "[string(parameters('partitionData'))]"
+                    "value": "[if(parameters('partitionData'), 'true', 'false')]"
                   },
                   {
                     "name": "DATA_OVERWRITE",
