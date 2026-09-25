@@ -414,7 +414,7 @@
       "vnetMode": "[if(and(steps('networking').enablePrivateEndpoint, equals(steps('networking').vnet.newOrExisting, 'existing')), 'existing', 'create')]",
       "vnetName": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.name, '')]",
       "vnetResourceGroup": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.resourceGroup, '')]",
-      "vnetAddressSpace": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.addressPrefixes, createArray('10.60.0.0/16'))]",
+      "vnetAddressSpace": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.addressPrefixes, parse('[\"10.60.0.0/16\"]'))]",
       "privateEndpointSubnetName": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.subnets.peSubnet.name, 'snet-privateendpoints')]",
       "privateEndpointSubnetPrefix": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.subnets.peSubnet.addressPrefix, '10.60.1.0/24')]",
       "privateDnsZoneMode": "[if(steps('networking').enablePrivateEndpoint, steps('networking').privateDnsZoneMode, 'create')]",
