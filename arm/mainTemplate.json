@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "8628536668082600372"
+      "templateHash": "2793494464192448853"
     }
   },
   "parameters": {
@@ -58,36 +58,17 @@
         "description": "MCA billing profile ID - the scope every export runs against."
       }
     },
-    "identityMode": {
-      "type": "string",
-      "defaultValue": "existing",
-      "allowedValues": [
-        "create",
-        "existing"
-      ],
-      "metadata": {
-        "description": "Create a new managed identity for the export script, or point at one that already exists."
-      }
-    },
     "exportScriptIdentityId": {
       "type": "string",
-      "defaultValue": "",
       "metadata": {
-        "description": "Resource ID of a user-assigned managed identity that already holds the billing profile grant. Required when identityMode is existing."
-      }
-    },
-    "identityName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Name for the managed identity when identityMode is create. Blank falls back to mi-<namePrefix>-exports."
+        "description": "Resource ID of an existing user-assigned managed identity holding Billing profile contributor on the billing profile. The export scripts run as it."
       }
     },
     "deployExports": {
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Create the cost management exports. Leave false on the first pass of a create-identity deploy - the new identity has no billing permission yet, so the export script would fail. Grant it, then redeploy with this on."
+        "description": "Create the cost management exports. Set false to deploy just storage, networking and ADF."
       }
     },
     "focusDatasetVersion": {
@@ -375,17 +356,106 @@
     "scheduleFrom": "[dateTimeAdd(parameters('baseTime'), 'P1D', 'yyyy-MM-ddTHH:mm:ssZ')]",
     "scheduleTo": "[dateTimeAdd(parameters('baseTime'), format('P{0}Y', parameters('scheduleYears')), 'yyyy-MM-ddTHH:mm:ssZ')]",
     "dailySourcePath": "[format('focus-daily/{0}-focus-daily', variables('effectiveExportPrefix'))]",
-    "monthlySourcePath": "[format('focus-monthly/{0}-focus-monthly', variables('effectiveExportPrefix'))]",
-    "effectiveIdentityId": "[if(equals(parameters('identityMode'), 'create'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))), parameters('exportScriptIdentityId'))]"
+    "monthlySourcePath": "[format('focus-monthly/{0}-focus-monthly', variables('effectiveExportPrefix'))]"
   },
   "resources": [
     {
-      "condition": "[equals(parameters('identityMode'), 'create')]",
-      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
-      "name": "[if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))]",
-      "location": "[parameters('location')]",
-      "tags": "[parameters('tags')]"
+      "condition": "[parameters('deployExports')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "check-export-identity-access",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          },
+          "scriptIdentityId": {
+            "value": "[parameters('exportScriptIdentityId')]"
+          },
+          "billingProfileScopeId": {
+            "value": "[variables('billingProfileScopeId')]"
+          },
+          "forceUpdateTag": {
+            "value": "[parameters('baseTime')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "7481736592852266975"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "scriptIdentityId": {
+              "type": "string"
+            },
+            "billingProfileScopeId": {
+              "type": "string"
+            },
+            "forceUpdateTag": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "idParts": "[split(parameters('scriptIdentityId'), '/')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Resources/deploymentScripts",
+              "apiVersion": "2023-08-01",
+              "name": "check-export-identity-access",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "AzureCLI",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('scriptIdentityId'))]": {}
+                }
+              },
+              "properties": {
+                "azCliVersion": "2.61.0",
+                "retentionInterval": "PT1H",
+                "timeout": "PT10M",
+                "cleanupPreference": "Always",
+                "forceUpdateTag": "[parameters('forceUpdateTag')]",
+                "environmentVariables": [
+                  {
+                    "name": "SCOPE",
+                    "value": "[parameters('billingProfileScopeId')]"
+                  },
+                  {
+                    "name": "IDENTITY_NAME",
+                    "value": "[variables('idParts')[8]]"
+                  },
+                  {
+                    "name": "PRINCIPAL_ID",
+                    "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('idParts')[2], variables('idParts')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('idParts')[8]), '2023-01-31').principalId]"
+                  }
+                ],
+                "scriptContent": "set -uo pipefail\nURL=\"https://management.azure.com${SCOPE}/providers/Microsoft.CostManagement/exports?api-version=2025-03-01\"\n\nif out=$(az rest --method get --url \"$URL\" 2>&1); then\n  echo \"Export identity '$IDENTITY_NAME' can reach the billing profile\"\n  exit 0\nfi\n\necho \"ERROR: Managed identity '$IDENTITY_NAME' (principal ID $PRINCIPAL_ID) has no access to billing profile $SCOPE. A Billing profile owner needs to grant it the Billing profile contributor role, then redeploy. Nothing else was deployed. Azure said: $out\" >&2\nexit 1\n"
+              }
+            }
+          ]
+        }
+      }
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -575,7 +645,10 @@
             }
           }
         }
-      }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'check-export-identity-access')]"
+      ]
     },
     {
       "condition": "[parameters('enablePrivateEndpoint')]",
@@ -843,7 +916,7 @@
             "value": "[parameters('tags')]"
           },
           "scriptIdentityId": {
-            "value": "[variables('effectiveIdentityId')]"
+            "value": "[parameters('exportScriptIdentityId')]"
           },
           "billingProfileScopeId": {
             "value": "[variables('billingProfileScopeId')]"
@@ -895,7 +968,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "1046481365985120418"
+              "templateHash": "2154440112452474724"
             }
           },
           "parameters": {
@@ -1032,7 +1105,7 @@
                     "value": "[parameters('location')]"
                   }
                 ],
-                "scriptContent": "set -euo pipefail\nAPI=\"2025-03-01\"\nBASE=\"https://management.azure.com${SCOPE}/providers/Microsoft.CostManagement/exports\"\n\n# one-time export window sanity check - the API caps a Custom timeframe at a\n# calendar month and silently does odd things past that.\n# jq not date - the script image's date chokes on ISO timestamps\n# FROM_S=$(date -u -d \"$ONETIME_FROM\" +%s)\n# TO_S=$(date -u -d \"$ONETIME_TO\" +%s)\nFROM_S=$(jq -rn --arg d \"$ONETIME_FROM\" '$d | fromdateiso8601')\nTO_S=$(jq -rn --arg d \"$ONETIME_TO\" '$d | fromdateiso8601')\nif [ \"$TO_S\" -le \"$FROM_S\" ]; then\n  echo \"ERROR: onetime window must run forwards ($ONETIME_FROM -> $ONETIME_TO)\" >&2\n  exit 1\nfi\nif [ $(( TO_S - FROM_S )) -gt 2678400 ]; then\n  echo \"ERROR: onetime window can't be longer than 31 days\" >&2\n  exit 1\nfi\n\n# put_export <key> <timeframe> <recurrence|\"\"> <status> <rootFolder> <description>\nput_export() {\n  key=\"$1\"; timeframe=\"$2\"; recurrence=\"$3\"; status=\"$4\"; folder=\"$5\"; desc=\"$6\"\n  name=\"${EXPORT_PREFIX}-${key}\"\n\n  definition=$(jq -n --arg tf \"$timeframe\" --arg dv \"$DATASET_VERSION\" \\\n    '{type:\"FocusCost\", timeframe:$tf, dataSet:{granularity:\"Daily\", configuration:{dataVersion:$dv}}}')\n\n  # timePeriod only goes on the Custom (one-time) export\n  if [ \"$timeframe\" = \"Custom\" ]; then\n    definition=$(echo \"$definition\" | jq --arg f \"$ONETIME_FROM\" --arg t \"$ONETIME_TO\" \\\n      '. + {timePeriod:{from:$f, to:$t}}')\n  fi\n\n  # One-time exports take status and NOTHING else - the API rejects a\n  # recurrence member even when it's null, so we leave the keys off entirely.\n  if [ -z \"$recurrence\" ]; then\n    schedule=$(jq -n --arg s \"$status\" '{status:$s}')\n  else\n    schedule=$(jq -n --arg s \"$status\" --arg r \"$recurrence\" --arg f \"$SCHEDULE_FROM\" --arg t \"$SCHEDULE_TO\" \\\n      '{status:$s, recurrence:$r, recurrencePeriod:{from:$f, to:$t}}')\n  fi\n\n  body=$(jq -n \\\n    --arg loc \"$EXPORT_LOCATION\" --arg d \"$desc\" --arg fmt \"$EXPORT_FORMAT\" \\\n    --arg cm \"$COMPRESSION_MODE\" --argjson pd \"$PARTITION_DATA\" --arg dob \"$DATA_OVERWRITE\" \\\n    --arg sa \"$STORAGE_ACCOUNT_ID\" --arg c \"$CONTAINER_NAME\" --arg rf \"$folder\" \\\n    --argjson def \"$definition\" --argjson sched \"$schedule\" \\\n    '{\n      identity: {type:\"SystemAssigned\"},\n      location: $loc,\n      properties: {\n        exportDescription: $d,\n        format: $fmt,\n        compressionMode: $cm,\n        partitionData: $pd,\n        dataOverwriteBehavior: $dob,\n        definition: $def,\n        deliveryInfo: {destination: {type:\"AzureBlob\", resourceId:$sa, container:$c, rootFolderPath:$rf}},\n        schedule: $sched\n      }\n    }')\n\n  echo \"PUT $name (root=$folder, timeframe=$timeframe, recurrence=${recurrence:-none})\"\n  az rest --method put --url \"${BASE}/${name}?api-version=${API}\" \\\n    --headers \"Content-Type=application/json\" --body \"$body\" > \"/tmp/${name}.json\"\n\n  # principalId is sometimes not on the PUT response yet, so poll the GET\n  pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n  tries=0\n  while [ -z \"$pid\" ] && [ \"$tries\" -lt 10 ]; do\n    sleep 5\n    az rest --method get --url \"${BASE}/${name}?api-version=${API}\" > \"/tmp/${name}.json\" || true\n    pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n    tries=$((tries+1))\n  done\n  if [ -z \"$pid\" ]; then\n    echo \"ERROR: no managed identity principalId came back for $name\" >&2\n    exit 1\n  fi\n  echo \"$pid\" >> /tmp/principals.txt\n}\n\n: > /tmp/principals.txt\n\n# All three are FocusCost - only the timeframe and schedule differ. The one-time\n# one has an inactive schedule so it never fires on its own, you kick it off with\n# Run now in the portal or the Execute API.\nput_export \"focus-onetime\" \"Custom\"       \"\"        \"Inactive\" \"focus-onetime\" \"One-time FOCUS cost and usage details\"\nput_export \"focus-daily\"   \"MonthToDate\"  \"Daily\"   \"Active\"   \"focus-daily\"   \"Daily FOCUS cost and usage details, month to date\"\nput_export \"focus-monthly\" \"TheLastMonth\" \"Monthly\" \"Active\"   \"focus-monthly\" \"Monthly FOCUS cost and usage details for last month\"\n\njq -R -s 'split(\"\\n\") | map(select(length > 0))' /tmp/principals.txt \\\n  | jq '{principalIds: .}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n\necho \"done - $(wc -l < /tmp/principals.txt) exports created\"\n"
+                "scriptContent": "set -euo pipefail\nAPI=\"2025-03-01\"\nBASE=\"https://management.azure.com${SCOPE}/providers/Microsoft.CostManagement/exports\"\n\n# one-time export window sanity check - the API caps a Custom timeframe at a\n# calendar month and silently does odd things past that.\n# jq not date - the script image's date chokes on ISO timestamps\n# FROM_S=$(date -u -d \"$ONETIME_FROM\" +%s)\n# TO_S=$(date -u -d \"$ONETIME_TO\" +%s)\nFROM_S=$(jq -rn --arg d \"$ONETIME_FROM\" '$d | fromdateiso8601')\nTO_S=$(jq -rn --arg d \"$ONETIME_TO\" '$d | fromdateiso8601')\nif [ \"$TO_S\" -le \"$FROM_S\" ]; then\n  echo \"ERROR: onetime window must run forwards ($ONETIME_FROM -> $ONETIME_TO)\" >&2\n  exit 1\nfi\nif [ $(( TO_S - FROM_S )) -gt 2678400 ]; then\n  echo \"ERROR: onetime window can't be longer than 31 days\" >&2\n  exit 1\nfi\n\n# put_export <key> <timeframe> <recurrence|\"\"> <status> <rootFolder> <description>\nput_export() {\n  key=\"$1\"; timeframe=\"$2\"; recurrence=\"$3\"; status=\"$4\"; folder=\"$5\"; desc=\"$6\"\n  name=\"${EXPORT_PREFIX}-${key}\"\n\n  definition=$(jq -n --arg tf \"$timeframe\" --arg dv \"$DATASET_VERSION\" \\\n    '{type:\"FocusCost\", timeframe:$tf, dataSet:{granularity:\"Daily\", configuration:{dataVersion:$dv}}}')\n\n  # timePeriod only goes on the Custom (one-time) export\n  if [ \"$timeframe\" = \"Custom\" ]; then\n    definition=$(echo \"$definition\" | jq --arg f \"$ONETIME_FROM\" --arg t \"$ONETIME_TO\" \\\n      '. + {timePeriod:{from:$f, to:$t}}')\n  fi\n\n  # One-time exports take status and NOTHING else - the API rejects a\n  # recurrence member even when it's null, so we leave the keys off entirely.\n  if [ -z \"$recurrence\" ]; then\n    schedule=$(jq -n --arg s \"$status\" '{status:$s}')\n  else\n    schedule=$(jq -n --arg s \"$status\" --arg r \"$recurrence\" --arg f \"$SCHEDULE_FROM\" --arg t \"$SCHEDULE_TO\" \\\n      '{status:$s, recurrence:$r, recurrencePeriod:{from:$f, to:$t}}')\n  fi\n\n  body=$(jq -n \\\n    --arg loc \"$EXPORT_LOCATION\" --arg d \"$desc\" --arg fmt \"$EXPORT_FORMAT\" \\\n    --arg cm \"$COMPRESSION_MODE\" --argjson pd \"$PARTITION_DATA\" --arg dob \"$DATA_OVERWRITE\" \\\n    --arg sa \"$STORAGE_ACCOUNT_ID\" --arg c \"$CONTAINER_NAME\" --arg rf \"$folder\" \\\n    --argjson def \"$definition\" --argjson sched \"$schedule\" \\\n    '{\n      identity: {type:\"SystemAssigned\"},\n      location: $loc,\n      properties: {\n        exportDescription: $d,\n        format: $fmt,\n        compressionMode: $cm,\n        partitionData: $pd,\n        dataOverwriteBehavior: $dob,\n        definition: $def,\n        deliveryInfo: {destination: {type:\"AzureBlob\", resourceId:$sa, container:$c, rootFolderPath:$rf}},\n        schedule: $sched\n      }\n    }')\n\n  echo \"PUT $name (root=$folder, timeframe=$timeframe, recurrence=${recurrence:-none})\"\n  # the access check only proves read - a reader-only identity gets this far,\n  # so spell out the write failure instead of az's \"please az login\" noise\n  if ! az rest --method put --url \"${BASE}/${name}?api-version=${API}\" \\\n    --headers \"Content-Type=application/json\" --body \"$body\" > \"/tmp/${name}.json\" 2> \"/tmp/${name}.err\"; then\n    echo \"ERROR: could not create export $name. If this is an authorization error the export identity can read the billing profile but not write to it - it needs Billing profile contributor, reader is not enough. Azure said: $(cat \"/tmp/${name}.err\")\" >&2\n    exit 1\n  fi\n\n  # principalId is sometimes not on the PUT response yet, so poll the GET\n  pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n  tries=0\n  while [ -z \"$pid\" ] && [ \"$tries\" -lt 10 ]; do\n    sleep 5\n    az rest --method get --url \"${BASE}/${name}?api-version=${API}\" > \"/tmp/${name}.json\" || true\n    pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n    tries=$((tries+1))\n  done\n  if [ -z \"$pid\" ]; then\n    echo \"ERROR: no managed identity principalId came back for $name\" >&2\n    exit 1\n  fi\n  echo \"$pid\" >> /tmp/principals.txt\n}\n\n: > /tmp/principals.txt\n\n# All three are FocusCost - only the timeframe and schedule differ. The one-time\n# one has an inactive schedule so it never fires on its own, you kick it off with\n# Run now in the portal or the Execute API.\nput_export \"focus-onetime\" \"Custom\"       \"\"        \"Inactive\" \"focus-onetime\" \"One-time FOCUS cost and usage details\"\nput_export \"focus-daily\"   \"MonthToDate\"  \"Daily\"   \"Active\"   \"focus-daily\"   \"Daily FOCUS cost and usage details, month to date\"\nput_export \"focus-monthly\" \"TheLastMonth\" \"Monthly\" \"Active\"   \"focus-monthly\" \"Monthly FOCUS cost and usage details for last month\"\n\njq -R -s 'split(\"\\n\") | map(select(length > 0))' /tmp/principals.txt \\\n  | jq '{principalIds: .}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n\necho \"done - $(wc -l < /tmp/principals.txt) exports created\"\n"
               }
             }
           ],
@@ -1045,7 +1118,6 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName')))]",
         "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage')]"
       ]
     },
@@ -2001,19 +2073,7 @@
     },
     "exportIdentityId": {
       "type": "string",
-      "value": "[variables('effectiveIdentityId')]"
-    },
-    "exportIdentityName": {
-      "type": "string",
-      "value": "[if(equals(parameters('identityMode'), 'create'), if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName')), '')]"
-    },
-    "exportIdentityPrincipalId": {
-      "type": "string",
-      "value": "[if(equals(parameters('identityMode'), 'create'), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))), '2023-01-31').principalId, '')]"
-    },
-    "nextStep": {
-      "type": "string",
-      "value": "[if(and(equals(parameters('identityMode'), 'create'), not(parameters('deployExports'))), format('Grant principal {0} the billing role on {1}, then redeploy with deployExports=true.', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', if(empty(parameters('identityName')), format('mi-{0}-exports', parameters('namePrefix')), parameters('identityName'))), '2023-01-31').principalId, variables('billingProfileScopeId')), '')]"
+      "value": "[parameters('exportScriptIdentityId')]"
     },
     "dailySourcePath": {
       "type": "string",

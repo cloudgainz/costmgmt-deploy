@@ -28,7 +28,7 @@
             "visible": true,
             "options": {
               "icon": "Warning",
-              "text": "The exports run at MCA billing profile scope, which a resource group deployment cannot reach directly. A managed identity has to hold the billing role. You can create one here or point at an existing one.",
+              "text": "The exports are created on your MCA billing profile, which this deployment can't grant access to. Before deploying, pick or create a user-assigned managed identity and have a Billing profile owner grant it the Billing profile contributor role on the billing profile. The deployment checks this access first and stops within a few minutes, with nothing else created, if the grant is missing.",
               "uri": "https://learn.microsoft.com/azure/cost-management-billing/manage/understand-mca-roles"
             }
           },
@@ -51,63 +51,20 @@
             }
           },
           {
-            "name": "identityMode",
-            "type": "Microsoft.Common.DropDown",
-            "label": "Export identity",
-            "defaultValue": "Use an existing managed identity",
-            "toolTip": "The identity the export script runs as. It must hold the billing role on the profile.",
+            "name": "exportIdentity",
+            "type": "Microsoft.Solutions.ResourceSelector",
+            "label": "Export managed identity",
+            "toolTip": "User-assigned managed identity that holds Billing profile contributor on the billing profile. The export setup runs as this identity.",
+            "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+            "options": {
+              "filter": {
+                "subscription": "all",
+                "location": "all"
+              }
+            },
             "constraints": {
-              "allowedValues": [
-                {
-                  "label": "Use an existing managed identity",
-                  "value": "existing"
-                },
-                {
-                  "label": "Create a new managed identity",
-                  "value": "create"
-                }
-              ],
               "required": true
             }
-          },
-          {
-            "name": "exportScriptIdentityId",
-            "type": "Microsoft.Common.TextBox",
-            "label": "Existing managed identity resource ID",
-            "toolTip": "Full resource ID of the user-assigned managed identity holding the billing role. az identity show -g <rg> -n <name> --query id -o tsv",
-            "constraints": {
-              "required": true,
-              "regex": "^/subscriptions/.+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/.+$",
-              "validationMessage": "Must be a full userAssignedIdentities resource ID."
-            },
-            "visible": "[equals(steps('costManagement').identityMode, 'existing')]"
-          },
-          {
-            "name": "identityName",
-            "type": "Microsoft.Common.TextBox",
-            "label": "New managed identity name",
-            "defaultValue": "",
-            "toolTip": "Blank falls back to mi-<name prefix>-exports.",
-            "visible": "[equals(steps('costManagement').identityMode, 'create')]",
-            "constraints": {
-              "required": false
-            }
-          },
-          {
-            "name": "createIdentityInfo",
-            "type": "Microsoft.Common.InfoBox",
-            "visible": "[equals(steps('costManagement').identityMode, 'create')]",
-            "options": {
-              "icon": "Warning",
-              "text": "A brand new identity has no billing permission, and this deployment cannot grant it one. Leave 'Create the cost management exports' unticked for this first run. When it finishes, grant the new identity the billing role on your billing profile, then run the deployment again with that box ticked. The exportIdentityPrincipalId output tells you which principal to grant."
-            }
-          },
-          {
-            "name": "deployExports",
-            "type": "Microsoft.Common.CheckBox",
-            "label": "Create the cost management exports",
-            "defaultValue": true,
-            "toolTip": "Untick on the first pass when creating a new identity. Storage, networking and Data Factory still deploy."
           },
           {
             "name": "exportPrefix",
@@ -393,7 +350,7 @@
       "location": "[location()]",
       "billingAccountId": "[steps('costManagement').billingAccountId]",
       "billingProfileId": "[steps('costManagement').billingProfileId]",
-      "exportScriptIdentityId": "[steps('costManagement').exportScriptIdentityId]",
+      "exportScriptIdentityId": "[steps('costManagement').exportIdentity.id]",
       "exportPrefix": "[steps('costManagement').exportPrefix]",
       "containerName": "[steps('costManagement').containerName]",
       "exportFormat": "[steps('costManagement').exportFormat]",
@@ -408,9 +365,6 @@
       "monthlyRunTime": "[steps('dataMover').monthlyRunTime]",
       "monthlyDayOfMonth": "[steps('dataMover').monthlyDayOfMonth]",
       "catchupCutoffDay": "[steps('dataMover').catchupCutoffDay]",
-      "identityMode": "[steps('costManagement').identityMode]",
-      "identityName": "[steps('costManagement').identityName]",
-      "deployExports": "[steps('costManagement').deployExports]",
       "vnetMode": "[if(and(steps('networking').enablePrivateEndpoint, equals(steps('networking').vnet.newOrExisting, 'existing')), 'existing', 'create')]",
       "vnetName": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.name, '')]",
       "vnetResourceGroup": "[if(steps('networking').enablePrivateEndpoint, steps('networking').vnet.resourceGroup, '')]",
