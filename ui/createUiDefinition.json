@@ -54,16 +54,12 @@
             "name": "exportIdentity",
             "type": "Microsoft.Solutions.ResourceSelector",
             "label": "Export managed identity",
-            "toolTip": "User-assigned managed identity holding Billing profile contributor on the billing profile. Don't have one yet? See 'Create the export identity' below for the commands.",
             "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
             "options": {
               "filter": {
                 "subscription": "all",
                 "location": "all"
               }
-            },
-            "constraints": {
-              "required": true
             }
           },
           {
@@ -85,7 +81,6 @@
                 "label": "Commands",
                 "defaultValue": "# Run in Azure Cloud Shell (Bash) as a Billing profile owner.\n# Needs rights to create the identity in the subscription too.\nRG='<resource-group>'\nNAME='<site-name>-umi'\nLOCATION='<region, e.g. eastus2>'\nACCT='<billing account ID>'\nPROF='<billing profile ID>'\n\naz group create -n \"$RG\" -l \"$LOCATION\"\naz identity create -g \"$RG\" -n \"$NAME\" -l \"$LOCATION\"\nPRINCIPAL=$(az identity show -g \"$RG\" -n \"$NAME\" --query principalId -o tsv)\nTENANT=$(az account show --query tenantId -o tsv)\n\n# new identities take a moment to show up in Entra\nsleep 30\n\n# grant Billing profile contributor on the billing profile\naz rest --method post \\\n  --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/createBillingRoleAssignment?api-version=2024-04-01\" \\\n  --body \"{\\\"principalId\\\":\\\"$PRINCIPAL\\\",\\\"principalTenantId\\\":\\\"$TENANT\\\",\\\"roleDefinitionId\\\":\\\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/billingRoleDefinitions/40000000-aaaa-bbbb-cccc-100000000001\\\"}\"\n\necho \"Pick this identity in the deployment form: $NAME\"\n",
                 "multiLine": true,
-                "readOnly": true,
                 "constraints": {
                   "required": false
                 }
