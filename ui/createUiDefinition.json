@@ -28,7 +28,7 @@
             "visible": true,
             "options": {
               "icon": "Warning",
-              "text": "The exports are created on your MCA billing profile, which this deployment can't grant access to. Before deploying, you need a user-assigned managed identity holding Billing account contributor on the billing account (or Billing profile contributor on the profile). The commands under 'Create the export identity' below set one up. The deployment checks this access first and stops within a few minutes, with nothing else created, if it's missing.",
+              "text": "The exports are created on your MCA billing profile, which this deployment can't grant access to. Before deploying, pick or create a user-assigned managed identity and have a Billing profile owner grant it the Billing profile contributor role on the billing profile. The deployment checks this access first and stops within a few minutes, with nothing else created, if the grant is missing.",
               "uri": "https://learn.microsoft.com/azure/cost-management-billing/manage/understand-mca-roles"
             }
           },
@@ -54,7 +54,7 @@
             "name": "exportIdentity",
             "type": "Microsoft.Solutions.ResourceSelector",
             "label": "Export managed identity",
-            "toolTip": "User-assigned managed identity holding Billing account contributor on the billing account (or Billing profile contributor on the profile). See 'Create the export identity' below if you don't have one.",
+            "toolTip": "User-assigned managed identity holding Billing profile contributor on the billing profile. Don't have one yet? See 'Create the export identity' below for the commands.",
             "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
             "options": {
               "filter": {
@@ -76,14 +76,14 @@
                 "type": "Microsoft.Common.InfoBox",
                 "options": {
                   "icon": "Info",
-                  "text": "A Billing account owner runs these in Azure Cloud Shell. They create the identity in its own resource group (separate from this deployment, so it can be done first) and grant it Billing account contributor on every billing account the person running it can see. Replace <site-name>, run it, then reopen this form and pick the identity above."
+                  "text": "If you don't have an identity with billing access yet, a Billing profile owner can run these commands in Azure Cloud Shell. Fill in the values at the top, run it, then come back and pick the identity above (you may need to restart the form for it to appear)."
                 }
               },
               {
                 "name": "identitySetupCommand",
                 "type": "Microsoft.Common.TextBox",
                 "label": "Commands",
-                "defaultValue": "# Run in Azure Cloud Shell (Bash) as a Billing account owner.\n# Creates the export identity and grants it Billing account contributor on\n# every billing account you can see, which covers all their billing profiles.\nNAME='<site-name>-umi'\nRG='<site-name>-umi-rg'\nLOCATION='eastus2'\n\naz group create -n \"$RG\" -l \"$LOCATION\" -o none\naz identity create -g \"$RG\" -n \"$NAME\" -l \"$LOCATION\" -o none\nPRINCIPAL=$(az identity show -g \"$RG\" -n \"$NAME\" --query principalId -o tsv)\nTENANT=$(az account show --query tenantId -o tsv)\n\n# new identities take a moment to show up in Entra\nsleep 30\n\nfor ACCT in $(az rest --method get --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01\" --query \"value[].name\" -o tsv); do\n  echo \"Granting Billing account contributor on $ACCT\"\n  az rest --method post \\\n    --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/createBillingRoleAssignment?api-version=2024-04-01\" \\\n    --body \"{\\\"principalId\\\":\\\"$PRINCIPAL\\\",\\\"principalTenantId\\\":\\\"$TENANT\\\",\\\"roleDefinitionId\\\":\\\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingRoleDefinitions/50000000-aaaa-bbbb-cccc-100000000001\\\"}\" \\\n    -o none && echo \"  granted\" || echo \"  not granted - see the error above\"\ndone\n\necho \"Pick this identity in the deployment form: $NAME\"\n",
+                "defaultValue": "# Run in Azure Cloud Shell (Bash) as a Billing profile owner.\n# Needs rights to create the identity in the subscription too.\nRG='<resource-group>'\nNAME='<site-name>-umi'\nLOCATION='<region, e.g. eastus2>'\nACCT='<billing account ID>'\nPROF='<billing profile ID>'\n\naz group create -n \"$RG\" -l \"$LOCATION\"\naz identity create -g \"$RG\" -n \"$NAME\" -l \"$LOCATION\"\nPRINCIPAL=$(az identity show -g \"$RG\" -n \"$NAME\" --query principalId -o tsv)\nTENANT=$(az account show --query tenantId -o tsv)\n\n# new identities take a moment to show up in Entra\nsleep 30\n\n# grant Billing profile contributor on the billing profile\naz rest --method post \\\n  --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/createBillingRoleAssignment?api-version=2024-04-01\" \\\n  --body \"{\\\"principalId\\\":\\\"$PRINCIPAL\\\",\\\"principalTenantId\\\":\\\"$TENANT\\\",\\\"roleDefinitionId\\\":\\\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/billingRoleDefinitions/40000000-aaaa-bbbb-cccc-100000000001\\\"}\"\n\necho \"Pick this identity in the deployment form: $NAME\"\n",
                 "multiLine": true,
                 "readOnly": true,
                 "constraints": {
