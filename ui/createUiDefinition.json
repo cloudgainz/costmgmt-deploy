@@ -28,7 +28,7 @@
             "visible": true,
             "options": {
               "icon": "Warning",
-              "text": "The exports are created on your MCA billing profile, which this deployment can't grant access to. Before deploying, pick or create a user-assigned managed identity and have a Billing profile owner grant it the Billing profile contributor role on the billing profile. The deployment checks this access first and stops within a few minutes, with nothing else created, if the grant is missing.",
+              "text": "The exports are created on your MCA billing profile, which this deployment can't grant access to. Before deploying, pick or create a user-assigned managed identity and have a Billing profile owner grant it the Billing profile contributor role on the billing profile.",
               "uri": "https://learn.microsoft.com/azure/cost-management-billing/manage/understand-mca-roles"
             }
           },
