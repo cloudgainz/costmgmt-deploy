@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4021139202860485225"
+      "templateHash": "12416546456861880316"
     }
   },
   "parameters": {
@@ -822,7 +822,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6834304647529876830"
+              "templateHash": "7571640680242808774"
             }
           },
           "parameters": {
@@ -834,17 +834,24 @@
             }
           },
           "variables": {
-            "storageAccountContributorRoleId": "17d1049b-9a84-46fb-8f53-869881c3d3ab",
+            "roleIds": [
+              "17d1049b-9a84-46fb-8f53-869881c3d3ab",
+              "f58310d9-a9f6-439a-9e8d-f62e7b41a168"
+            ],
             "idParts": "[split(parameters('scriptIdentityId'), '/')]"
           },
           "resources": [
             {
+              "copy": {
+                "name": "grants",
+                "count": "[length(variables('roleIds'))]"
+              },
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
               "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('scriptIdentityId'), variables('storageAccountContributorRoleId'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('scriptIdentityId'), variables('roleIds')[copyIndex()])]",
               "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageAccountContributorRoleId'))]",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleIds')[copyIndex()])]",
                 "principalId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('idParts')[2], variables('idParts')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('idParts')[8]), '2023-01-31').principalId]",
                 "principalType": "ServicePrincipal"
               }
