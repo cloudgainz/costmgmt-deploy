@@ -213,8 +213,21 @@ minute to update.
 
 ### 2. Start the schedules
 
-The daily and monthly schedules are created switched off. Turn them on in
-**Cloud Shell**:
+The daily and monthly schedules are created switched off. To see their names,
+list the triggers on the factory in **Cloud Shell**:
+
+```bash
+az datafactory trigger list -g rg-contoso-costmgmt --factory-name contoso-adf-focus-adf -o table
+```
+
+If you don't know the factory name either, list the factories in the resource
+group first:
+
+```bash
+az datafactory list -g rg-contoso-costmgmt -o table
+```
+
+Then turn both schedules on:
 
 ```bash
 az datafactory trigger start -g rg-contoso-costmgmt --factory-name contoso-adf-focus-adf -n contoso-adf-focus-DailyTrigger
