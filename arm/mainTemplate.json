@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "12416546456861880316"
+      "templateHash": "3324729667708572136"
     }
   },
   "parameters": {
@@ -348,6 +348,7 @@
     }
   },
   "variables": {
+    "templateVersion": "20261008080808",
     "effectiveExportPrefix": "[if(empty(parameters('exportPrefix')), parameters('namePrefix'), parameters('exportPrefix'))]",
     "billingProfileScopeId": "[format('/providers/Microsoft.Billing/billingAccounts/{0}/billingProfiles/{1}', parameters('billingAccountId'), parameters('billingProfileId'))]",
     "storageAccountName": "[format('{0}{1}', parameters('namePrefix'), substring(uniqueString(resourceGroup().id), 0, 6))]",
@@ -1997,6 +1998,10 @@
     }
   ],
   "outputs": {
+    "templateVersion": {
+      "type": "string",
+      "value": "[variables('templateVersion')]"
+    },
     "resourceGroupName": {
       "type": "string",
       "value": "[resourceGroup().name]"

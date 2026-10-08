@@ -5,6 +5,14 @@
   "parameters": {
     "basics": [
       {
+        "name": "templateVersion",
+        "type": "Microsoft.Common.TextBlock",
+        "visible": true,
+        "options": {
+          "text": "Template version: 20261008080808"
+        }
+      },
+      {
         "name": "namePrefix",
         "type": "Microsoft.Common.TextBox",
         "label": "Name prefix",
