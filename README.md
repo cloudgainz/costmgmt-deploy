@@ -83,6 +83,45 @@ echo "Pick this identity in the deployment form: $NAME"
 Subscription Owner or Global Administrator alone isn't enough for the last
 step. It needs a billing role on the billing profile.
 
+### Finding your billing account and profile IDs
+
+The identity command (`ACCT` and `PROF`) and the deployment form (**Billing
+account ID** and **Billing profile ID**) both need these. In **Cloud Shell
+(Bash)**:
+
+```bash
+# billing accounts you can see - the ACCT column is the billing account ID
+az rest --method get \
+  --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts?api-version=2024-04-01" \
+  --query "value[].{ACCT:name, name:properties.displayName}" -o table
+
+# billing profiles under that account - the PROF column is the billing profile ID
+ACCT='1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d:7e8f9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b_2019-05-31'
+az rest --method get \
+  --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles?api-version=2024-04-01" \
+  --query "value[].{PROF:name, name:properties.displayName}" -o table
+```
+
+Example output:
+
+```
+ACCT                                                                                  Name
+------------------------------------------------------------------------------------  ------------
+1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d:7e8f9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b_2019-05-31  Contoso Ltd
+
+PROF                Name
+------------------  ------------
+AB12-CD34-EF5-GH67  Contoso Ltd
+```
+
+The commands only list accounts and profiles you have a billing role on. If
+nothing comes back, run them as someone with billing access.
+
+In the portal: **Cost Management + Billing → Billing scopes** → your billing
+account → **Settings → Properties** shows the billing account ID. **Billing
+profiles** → your profile → **Settings → Properties** shows the billing profile
+ID.
+
 ### Who runs the deployment
 
 Whoever fills in the form needs **Owner** on the target subscription or
@@ -108,8 +147,8 @@ These are made up but realistic, and the rest of this guide uses them.
 
 | Form field | Example | Notes |
 |---|---|---|
-| Billing account ID | `1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d:7e8f9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b_2019-05-31` | Cost Management + Billing → Properties |
-| Billing profile ID | `AB12-CD34-EF5-GH67` | Cost Management + Billing → Billing profiles → Properties |
+| Billing account ID | `1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d:7e8f9a0b-1c2d-3e4f-5a6b-7c8d9e0f1a2b_2019-05-31` | See *Finding your billing account and profile IDs* |
+| Billing profile ID | `AB12-CD34-EF5-GH67` | See *Finding your billing account and profile IDs* |
 | Export managed identity | `contoso-adf-focus-umi` | The identity from the setup command |
 | Export name prefix | *(blank)* | Blank reuses the name prefix, so exports are named `contosocm-focus-daily` etc. |
 | Export container | `cost-exports` | |
