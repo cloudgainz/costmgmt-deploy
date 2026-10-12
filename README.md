@@ -33,6 +33,96 @@ On your billing profile:
 - Three FOCUS cost exports: one-time, daily (month to date) and monthly (last
   month)
 
+### How it fits together
+
+Everything on the left lives in your tenant. The only thing that leaves it is
+the copy to the CloudGainz storage account on the right.
+
+```mermaid
+flowchart TB
+  subgraph customer["Customer tenant (local)"]
+    direction TB
+
+    subgraph pre["Already there before the deployment"]
+      billing["MCA billing profile"]
+      umi["Export identity<br/>user-assigned managed identity<br/>with Billing profile contributor"]
+    end
+
+    subgraph rg["Created by the deployment"]
+      direction TB
+
+      subgraph scripts["Deployment scripts - run on every deploy, as the export identity"]
+        s1["create-focus-exports"]
+        s2["stop-adf-triggers"]
+        s3["finalize-adf"]
+      end
+
+      exports["FOCUS cost exports<br/>one-time, daily, monthly<br/>live on the billing profile"]
+
+      subgraph stg["Export storage account"]
+        container["cost-exports container<br/>focus-daily/ and focus-monthly/"]
+      end
+
+      net["Private endpoint, VNet, private DNS zone<br/>VNet and zone can be existing ones"]
+
+      subgraph adf["Data Factory"]
+        direction TB
+        trig["Daily and monthly triggers"]
+        mpe["Managed private endpoint"]
+
+        subgraph pipe["DataMoverPipeline"]
+          direction TB
+          p1["Step 1 - work out the month folder"]
+          p2["Step 2 - delete that month at the destination"]
+          p3["Step 3 - list the export run folders"]
+          p4["Step 4 - copy each run folder"]
+          p5["Step 5 - write the run log"]
+          p1 --> p2 --> p3 --> p4 --> p5
+        end
+      end
+    end
+  end
+
+  subgraph cg["CloudGainz tenant (remote)"]
+    subgraph landing["Landing storage account - reached with the SAS token"]
+      site["site-name container<br/>focus-daily/ and focus-monthly/"]
+      logs["logs container"]
+      runbooks["runbooks container"]
+    end
+  end
+
+  umi -.->|"runs"| scripts
+  billing -->|"cost data"| exports
+  s1 -->|"creates"| exports
+  exports -->|"write files daily and monthly"| container
+  net ---|"private access"| container
+
+  s2 -->|"stops before a redeploy"| trig
+  s3 -->|"starts"| trig
+  s3 -->|"approves"| mpe
+  trig -->|"run"| pipe
+
+  container -->|"private link"| mpe
+  mpe -->|"export files"| p4
+  p2 -->|"deletes the month folder"| site
+  p4 -->|"copies files over HTTPS"| site
+  p5 -->|"run log"| logs
+  s3 -->|"results file"| runbooks
+
+  subgraph key["Key"]
+    k1["Created by the deployment"]
+    k2["Existing in the customer tenant"]
+    k3["Remote - CloudGainz"]
+  end
+
+  classDef created fill:#d9f2e3,stroke:#1a7f4b,color:#111
+  classDef existing fill:#eceff1,stroke:#607d8b,color:#111,stroke-dasharray: 5 5
+  classDef remote fill:#dbe9fb,stroke:#1f5fa8,color:#111
+  class s1,s2,s3,exports,container,net,trig,mpe,p1,p2,p3,p4,p5,k1 created
+  class billing,umi,k2 existing
+  class site,logs,runbooks,k3 remote
+```
+
 ---
 
 ## Before you start
