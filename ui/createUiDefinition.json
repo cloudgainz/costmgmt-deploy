@@ -9,7 +9,7 @@
         "type": "Microsoft.Common.TextBlock",
         "visible": true,
         "options": {
-          "text": "Template version: 20261008080808"
+          "text": "Template version: 20261012075550"
         }
       },
       {
@@ -359,15 +359,6 @@
             "visible": "[steps('dataMover').deployDataFactory]",
             "constraints": {
               "required": true
-            }
-          },
-          {
-            "name": "triggerInfo",
-            "type": "Microsoft.Common.InfoBox",
-            "visible": "[steps('dataMover').deployDataFactory]",
-            "options": {
-              "icon": "Info",
-              "text": "ARM always creates Data Factory triggers stopped. After the deployment finishes, run the startTriggersCommand from the outputs to start them."
             }
           }
         ]

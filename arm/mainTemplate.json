@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "3324729667708572136"
+      "templateHash": "15141294381412226011"
     }
   },
   "parameters": {
@@ -348,7 +348,7 @@
     }
   },
   "variables": {
-    "templateVersion": "20261008080808",
+    "templateVersion": "20261012075550",
     "effectiveExportPrefix": "[if(empty(parameters('exportPrefix')), parameters('namePrefix'), parameters('exportPrefix'))]",
     "billingProfileScopeId": "[format('/providers/Microsoft.Billing/billingAccounts/{0}/billingProfiles/{1}', parameters('billingAccountId'), parameters('billingProfileId'))]",
     "storageAccountName": "[format('{0}{1}', parameters('namePrefix'), substring(uniqueString(resourceGroup().id), 0, 6))]",
@@ -799,7 +799,7 @@
       ]
     },
     {
-      "condition": "[parameters('deployExports')]",
+      "condition": "[or(parameters('deployExports'), parameters('deployDataFactory'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "grant-export-identity-storage",
@@ -1210,6 +1210,9 @@
           },
           "scheduleStartTime": {
             "value": "[parameters('baseTime')]"
+          },
+          "scriptIdentityId": {
+            "value": "[parameters('exportScriptIdentityId')]"
           }
         },
         "template": {
@@ -1219,7 +1222,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "1185479253885175322"
+              "templateHash": "5373010259676550957"
             }
           },
           "parameters": {
@@ -1283,6 +1286,19 @@
             },
             "scheduleStartTime": {
               "type": "string"
+            },
+            "scriptIdentityId": {
+              "type": "string",
+              "metadata": {
+                "description": "User-assigned identity the stop/finalize scripts run as. Same one the export script uses."
+              }
+            },
+            "scriptRunTag": {
+              "type": "string",
+              "defaultValue": "[utcNow()]",
+              "metadata": {
+                "description": "New value every deploy so the scripts always re-run."
+              }
             }
           },
           "variables": {
@@ -1308,6 +1324,35 @@
               "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
               "17d1049b-9a84-46fb-8f53-869881c3d3ab"
             ],
+            "dataFactoryContributorRoleId": "673868aa-7521-48a0-acc6-0f60742d39f5",
+            "factoryId": "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+            "results": {
+              "Mode": "[if(variables('usePrivateEndpoint'), 'ManagedVNet', 'Standard')]",
+              "ResourceGroup": "[resourceGroup().name]",
+              "DataFactory": "[variables('dataFactoryName')]",
+              "Location": "[parameters('location')]",
+              "SourceStorage": "[parameters('exportStorageAccountName')]",
+              "SourceContainer": "[parameters('exportStorageContainer')]",
+              "SourceFolder": "",
+              "DailiesFolder": "[parameters('dailySourcePath')]",
+              "MonthliesFolder": "[parameters('monthlySourcePath')]",
+              "DestStorage": "[parameters('customerStorageAccount')]",
+              "DestContainer": "[variables('destContainerName')]",
+              "DestFolder": "",
+              "Pipeline": "[variables('pipelineName')]",
+              "TimeZone": "[parameters('timeZone')]",
+              "DailyTrigger": "[variables('dailyTriggerName')]",
+              "DailyRunTime": "[parameters('dailyRunTime')]",
+              "MonthlyTrigger": "[variables('monthlyTriggerName')]",
+              "MonthlyDayOfMonth": "[parameters('monthlyDayOfMonth')]",
+              "MonthlyRunTime": "[parameters('monthlyRunTime')]",
+              "CatchupCutoffDay": "[parameters('catchupCutoffDay')]",
+              "IntegrationRuntime": "[if(variables('usePrivateEndpoint'), variables('irName'), 'AutoResolveIntegrationRuntime')]",
+              "PrivateEndpoint": "[if(variables('usePrivateEndpoint'), variables('managedPeName'), '')]",
+              "ScheduleStartTime": "[variables('startTimeIso')]",
+              "WebhookStatus": "disabled",
+              "WebhookDisabledReason": "Deployed from the portal template, no app registration gets created."
+            },
             "targetDateExpr": "[format('@addDays(convertTimeZone(utcnow(), ''UTC'', ''{0}''), mul(-1, pipeline().parameters.catchupDays))', parameters('timeZone'))]",
             "dateRangeExpr": "@concat(formatDateTime(startOfMonth(variables('targetDate')), 'yyyyMMdd'), '-', formatDateTime(addDays(addToTime(startOfMonth(variables('targetDate')), 1, 'Month'), -1), 'yyyyMMdd'))",
             "dateRangeFolderExpr": "@concat(pipeline().parameters.sourceFolderPath, '/', variables('dateRange'))",
@@ -1347,7 +1392,8 @@
               "errorCode": "@{activity('WriteSuccessLog').error.errorCode}",
               "errorMessage": "@{activity('WriteSuccessLog').error.message}",
               "note": "Copy succeeded but the success log write failed"
-            }
+            },
+            "scriptIdParts": "[split(parameters('scriptIdentityId'), '/')]"
           },
           "resources": [
             {
@@ -1373,6 +1419,20 @@
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('sourceRoleIds')[copyIndex()])]",
                 "principalId": "[reference(resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName')), '2018-06-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+              "name": "[guid(variables('factoryId'), parameters('scriptIdentityId'), variables('dataFactoryContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('dataFactoryContributorRoleId'))]",
+                "principalId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', variables('scriptIdParts')[2], variables('scriptIdParts')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', variables('scriptIdParts')[8]), '2023-01-31').principalId]",
                 "principalType": "ServicePrincipal"
               },
               "dependsOn": [
@@ -1862,6 +1922,42 @@
               ]
             },
             {
+              "type": "Microsoft.Resources/deploymentScripts",
+              "apiVersion": "2023-08-01",
+              "name": "stop-adf-triggers",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "AzureCLI",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('scriptIdentityId'))]": {}
+                }
+              },
+              "properties": {
+                "azCliVersion": "2.61.0",
+                "retentionInterval": "PT4H",
+                "timeout": "PT15M",
+                "cleanupPreference": "OnSuccess",
+                "forceUpdateTag": "[parameters('scriptRunTag')]",
+                "environmentVariables": [
+                  {
+                    "name": "FACTORY_ID",
+                    "value": "[variables('factoryId')]"
+                  },
+                  {
+                    "name": "DAILY_TRIGGER",
+                    "value": "[variables('dailyTriggerName')]"
+                  },
+                  {
+                    "name": "MONTHLY_TRIGGER",
+                    "value": "[variables('monthlyTriggerName')]"
+                  }
+                ],
+                "scriptContent": "set -euo pipefail\nAPI=\"2018-06-01\"\nBASE=\"https://management.azure.com${FACTORY_ID}/triggers\"\n\nfor t in \"$DAILY_TRIGGER\" \"$MONTHLY_TRIGGER\"; do\n  # first deploy theres no factory yet, this just comes back empty\n  state=$(az rest --method get --url \"${BASE}/${t}?api-version=${API}\" --query properties.runtimeState -o tsv 2>/dev/null || true)\n  if [ \"$state\" != \"Started\" ]; then\n    echo \"$t not running (${state:-not found}), nothing to stop\"\n    continue\n  fi\n\n  echo \"stopping $t\"\n  az rest --method post --url \"${BASE}/${t}/stop?api-version=${API}\"\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    state=$(az rest --method get --url \"${BASE}/${t}?api-version=${API}\" --query properties.runtimeState -o tsv)\n    [ \"$state\" = \"Stopped\" ] && break\n    sleep 5\n  done\n  echo \"$t is $state\"\ndone\n"
+              }
+            },
+            {
               "type": "Microsoft.DataFactory/factories/triggers",
               "apiVersion": "2018-06-01",
               "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('dailyTriggerName'))]",
@@ -1899,7 +1995,8 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
-                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]"
+                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]",
+                "[resourceId('Microsoft.Resources/deploymentScripts', 'stop-adf-triggers')]"
               ]
             },
             {
@@ -1943,7 +2040,78 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
-                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]"
+                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]",
+                "[resourceId('Microsoft.Resources/deploymentScripts', 'stop-adf-triggers')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deploymentScripts",
+              "apiVersion": "2023-08-01",
+              "name": "finalize-adf",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "AzureCLI",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('scriptIdentityId'))]": {}
+                }
+              },
+              "properties": {
+                "azCliVersion": "2.61.0",
+                "retentionInterval": "PT4H",
+                "timeout": "PT30M",
+                "cleanupPreference": "OnSuccess",
+                "forceUpdateTag": "[parameters('scriptRunTag')]",
+                "environmentVariables": [
+                  {
+                    "name": "FACTORY_ID",
+                    "value": "[variables('factoryId')]"
+                  },
+                  {
+                    "name": "STORAGE_ID",
+                    "value": "[parameters('exportStorageAccountId')]"
+                  },
+                  {
+                    "name": "USE_PE",
+                    "value": "[if(variables('usePrivateEndpoint'), 'true', 'false')]"
+                  },
+                  {
+                    "name": "MANAGED_PE_NAME",
+                    "value": "[variables('managedPeName')]"
+                  },
+                  {
+                    "name": "DAILY_TRIGGER",
+                    "value": "[variables('dailyTriggerName')]"
+                  },
+                  {
+                    "name": "MONTHLY_TRIGGER",
+                    "value": "[variables('monthlyTriggerName')]"
+                  },
+                  {
+                    "name": "SITE_NAME",
+                    "value": "[parameters('siteName')]"
+                  },
+                  {
+                    "name": "CUSTOMER_ACCOUNT",
+                    "value": "[parameters('customerStorageAccount')]"
+                  },
+                  {
+                    "name": "CUSTOMER_TOKEN",
+                    "secureValue": "[parameters('customerToken')]"
+                  },
+                  {
+                    "name": "RESULTS_JSON",
+                    "value": "[string(variables('results'))]"
+                  }
+                ],
+                "scriptContent": "set -euo pipefail\nARM=\"https://management.azure.com\"\nADF_API=\"2018-06-01\"\nSTG_API=\"2023-05-01\"\n\n# same retry wrapper as the export script. the factory role is brand new on a\n# first deploy and takes a few minutes to kick in.\naz_rest() {\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    if az rest \"$@\"; then return 0; fi\n    [ \"$try\" -lt 10 ] && { echo \"az rest failed, retrying in 30s ($try/10)\" >&2; sleep 30; }\n  done\n  return 1\n}\n\n# ---- approve the managed private endpoint ----\n\nif [ \"$USE_PE\" = \"true\" ]; then\n  PE_URL=\"${ARM}${FACTORY_ID}/managedVirtualNetworks/default/managedPrivateEndpoints/${MANAGED_PE_NAME}?api-version=${ADF_API}\"\n  pe_status() { az_rest --method get --url \"$PE_URL\" --query properties.connectionState.status -o tsv; }\n\n  status=$(pe_status)\n  if [ \"$status\" = \"Approved\" ]; then\n    echo \"$MANAGED_PE_NAME already approved\"\n  else\n    # find our connection on the storage account. it can take a bit to show up.\n    conn=\"\"\n    for n in 1 2 3 4 5 6 7 8 9 10 11 12; do\n      az_rest --method get --url \"${ARM}${STORAGE_ID}/privateEndpointConnections?api-version=${STG_API}\" > /tmp/conns.json\n      # ours has the managed PE name in the endpoint id\n      conn=$(jq -c --arg pe \"$MANAGED_PE_NAME\" \\\n        '[.value[] | select((.properties.privateEndpoint.id // \"\") | ascii_downcase | contains($pe | ascii_downcase))][0] // empty' /tmp/conns.json)\n      # no name match - take the pending one, but only if theres exactly one\n      if [ -z \"$conn\" ]; then\n        conn=$(jq -c '[.value[] | select(.properties.privateLinkServiceConnectionState.status == \"Pending\")] | if length == 1 then .[0] else empty end' /tmp/conns.json)\n      fi\n      [ -n \"$conn\" ] && break\n      echo \"connection not on the storage account yet, waiting ($n/12)\"\n      sleep 10\n    done\n\n    if [ -z \"$conn\" ]; then\n      echo \"ERROR: could not find the private endpoint connection for $MANAGED_PE_NAME. Connections on the account:\" >&2\n      jq -r '.value[] | \"  \\(.name)  \\(.properties.privateLinkServiceConnectionState.status)\"' /tmp/conns.json >&2\n      exit 1\n    fi\n\n    conn_id=$(echo \"$conn\" | jq -r '.id')\n    conn_state=$(echo \"$conn\" | jq -r '.properties.privateLinkServiceConnectionState.status')\n    if [ \"$conn_state\" != \"Approved\" ]; then\n      echo \"approving $conn_id\"\n      az_rest --method put --url \"${ARM}${conn_id}?api-version=${STG_API}\" \\\n        --headers \"Content-Type=application/json\" \\\n        --body '{\"properties\":{\"privateLinkServiceConnectionState\":{\"status\":\"Approved\",\"description\":\"Approved by the cost management deployment\"}}}' > /dev/null\n    fi\n\n    # the factory takes a minute or two to notice\n    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do\n      status=$(pe_status)\n      [ \"$status\" = \"Approved\" ] && break\n      echo \"factory still shows $MANAGED_PE_NAME as ${status:-unknown}, waiting ($n/30)\"\n      sleep 20\n    done\n    if [ \"$status\" = \"Approved\" ]; then\n      echo \"$MANAGED_PE_NAME approved\"\n    else\n      echo \"WARNING: approved on the storage account but the factory still says ${status:-unknown}. Starting the triggers anyway.\" >&2\n    fi\n  fi\nfi\n\n# ---- start the triggers ----\n\nfor t in \"$DAILY_TRIGGER\" \"$MONTHLY_TRIGGER\"; do\n  echo \"starting $t\"\n  az_rest --method post --url \"${ARM}${FACTORY_ID}/triggers/${t}/start?api-version=${ADF_API}\"\ndone\n\n# ---- results file ----\n\n# Setup-DataFactory.ps1 nulls these out when theres no webhook SP, so same here\necho \"$RESULTS_JSON\" | jq '.PrivateEndpoint |= (if . == \"\" then null else . end)\n  | . + {WebhookSPName: null, WebhookTenantId: null, WebhookClientId: null, WebhookClientSecret: null, WebhookTriggerUri: null}' > /tmp/results.json\n\n# dont fail the whole deployment over this one\nif az storage blob upload --account-name \"$CUSTOMER_ACCOUNT\" --sas-token \"${CUSTOMER_TOKEN#\\?}\" \\\n     --container-name runbooks --name \"${SITE_NAME}-datafactory.json\" --file /tmp/results.json \\\n     --overwrite --only-show-errors > /dev/null; then\n  echo \"results uploaded to ${CUSTOMER_ACCOUNT}/runbooks/${SITE_NAME}-datafactory.json\"\nelse\n  echo \"WARNING: could not upload the results file. Is there a runbooks container on ${CUSTOMER_ACCOUNT}?\" >&2\nfi\n\necho \"done\"\n"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories/triggers', variables('dataFactoryName'), variables('dailyTriggerName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/managedVirtualNetworks/managedPrivateEndpoints', variables('dataFactoryName'), 'default', variables('managedPeName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/triggers', variables('dataFactoryName'), variables('monthlyTriggerName'))]",
+                "[extensionResourceId(resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName')), 'Microsoft.Authorization/roleAssignments', guid(variables('factoryId'), parameters('scriptIdentityId'), variables('dataFactoryContributorRoleId')))]"
               ]
             }
           ],
@@ -1992,6 +2160,7 @@
         }
       },
       "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'grant-export-identity-storage')]",
         "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-network')]",
         "[resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage')]"
       ]

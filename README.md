@@ -24,6 +24,10 @@ In the resource group you pick:
 - An Azure Data Factory with a pipeline and two schedules (daily and monthly)
   that copy the exports to CloudGainz
 
+The deployment also approves the Data Factory's private endpoint on the export
+storage account and starts both schedules, so there is nothing to finish by
+hand afterwards.
+
 On your billing profile:
 
 - Three FOCUS cost exports: one-time, daily (month to date) and monthly (last
@@ -82,6 +86,21 @@ echo "Pick this identity in the deployment form: $NAME"
 
 Subscription Owner or Global Administrator alone isn't enough for the last
 step. It needs a billing role on the billing profile.
+
+#### What the identity ends up with
+
+The billing role above is the only one you grant yourself. The deployment adds
+the rest, and none of it reaches past the two resources it creates:
+
+| Role | Scope | Granted by | Used for |
+|---|---|---|---|
+| Billing profile contributor | The billing profile | The setup command | Creating the cost exports |
+| Storage Account Contributor | The export storage account only | The deployment | Creating the exports, approving the Data Factory's private endpoint |
+| Role Based Access Control Administrator | The export storage account only | The deployment | Letting each export write to the storage account |
+| Data Factory Contributor | The Data Factory only | The deployment | Stopping and starting the two schedules |
+
+The identity gets no role on the subscription, the resource group or the
+tenant.
 
 ### Finding your billing account and profile IDs
 
@@ -193,48 +212,47 @@ These are made up but realistic, and the rest of this guide uses them.
 
 ## After the deployment
 
-### 1. Approve the Data Factory's private endpoint
+Nothing needs doing by hand. The last step of the deployment (`finalize-adf`)
+approves the Data Factory's private endpoint, starts the daily and monthly
+schedules, and sends a small results file to CloudGainz. If you want to check
+its work:
 
-The Data Factory reaches the export storage through its own private endpoint,
-which waits for approval on the storage account. Until it's approved, every
-pipeline run fails.
+### The private endpoint
 
 1. Search **Resource groups** → click **`rg-contoso-costmgmt`**.
 2. Click the storage account **`contosocm4x7k2q`**.
 3. Left menu: **Security + networking → Networking** → **Private endpoint connections** tab.
-4. Tick the **Pending** row (`contoso-adf-focus-SourceStoragePE`) → **Approve**.
+4. There are two rows, both **Approved**: the Data Factory's
+   (`contoso-adf-focus-SourceStoragePE`) and the storage account's own
+   (`pe-contosocm4x7k2q-blob`).
 
-Leave the other row, `pe-contosocm4x7k2q-blob`, alone. It's already approved.
+From the Data Factory side: open **`contoso-adf-focus-adf`** → **Launch
+Studio** → **Manage** → **Managed private endpoints**.
+`contoso-adf-focus-SourceStoragePE` should show **Approved**.
 
-To check it from the Data Factory side: open **`contoso-adf-focus-adf`** →
-**Launch Studio** → **Manage** → **Managed private endpoints**.
-`contoso-adf-focus-SourceStoragePE` should show **Approved**. It can take a
-minute to update.
+### The schedules
 
-### 2. Start the schedules
-
-The daily and monthly schedules are created switched off. To see their names,
-list the triggers on the factory in **Cloud Shell**:
+In **Cloud Shell**:
 
 ```bash
-az datafactory trigger list -g rg-contoso-costmgmt --factory-name contoso-adf-focus-adf -o table
+az datafactory trigger list -g rg-contoso-costmgmt --factory-name contoso-adf-focus-adf \
+  --query "[].{name:name, state:properties.runtimeState}" -o table
 ```
 
-If you don't know the factory name either, list the factories in the resource
-group first:
+Both should show `Started`. If you don't know the factory name, list the
+factories in the resource group first:
 
 ```bash
 az datafactory list -g rg-contoso-costmgmt -o table
 ```
 
-Then turn both schedules on:
+If one ever needs starting by hand, the deployment's Outputs include the
+command as `startTriggersCommand`.
 
-```bash
-az datafactory trigger start -g rg-contoso-costmgmt --factory-name contoso-adf-focus-adf -n contoso-adf-focus-DailyTrigger
-az datafactory trigger start -g rg-contoso-costmgmt --factory-name contoso-adf-focus-adf -n contoso-adf-focus-MonthlyTrigger
-```
+### Deploying again
 
-The deployment's Outputs include the same command as `startTriggersCommand`.
+Running the deployment again over the same resource group is fine. It stops
+the schedules, applies the changes, and starts them again.
 
 ---
 
@@ -292,3 +310,6 @@ focus-daily/contosocm-focus-daily/<yyyyMMdd-yyyyMMdd>/<guid>/part_0_0001.snappy.
 
 Plus a run log, `contoso-adf-focus-daily-<run id>.json`, in the `logs`
 container.
+
+The deployment itself also leaves `contoso-adf-focus-datafactory.json` in the
+`runbooks` container, describing what it set up.
