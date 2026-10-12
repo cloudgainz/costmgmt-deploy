@@ -2,16 +2,21 @@
 
 param(
     [Parameter(Mandatory)]
-    [string]$ResourceGroupName
+    [string]$ResourceGroupName,
+
+    [ValidateSet('Daily', 'Monthly', 'All')]
+    [string]$Test
 )
 
 # Checks a costmgmt-deploy resource group after a deployment.
-# Read only - doesnt change or start anything.
+# Read only unless you pass -Test, which kicks off a real pipeline run and waits on it.
 #
 #   ./Deployment-Validation.ps1 -ResourceGroupName rg-contoso-costmgmt
+#   ./Deployment-Validation.ps1 -ResourceGroupName rg-contoso-costmgmt -Test Daily
 
 $ErrorActionPreference = 'Stop'
 $results = @()
+$runParameters = [ordered]@{}
 
 function Add-Check {
     param(
@@ -186,6 +191,15 @@ if (-not $factory) {
         $when = "{0} at {1:00}:{2:00} {3}" -f $recurrence.Frequency, $recurrence.Schedule.Hours[0], $recurrence.Schedule.Minutes[0], $recurrence.TimeZone
         $status = if ($trigger.RuntimeState -eq 'Started') { 'Pass' } else { 'Fail' }
         Add-Check -Name "Trigger $($trigger.Name)" -Status $status -Detail "$($trigger.RuntimeState), $when"
+
+        # hang on to what the trigger passes the pipeline, manual runs reuse it
+        $parameters = [ordered]@{}
+        $triggerParameters = $trigger.Properties.Pipelines[0].Parameters
+        foreach ($key in $triggerParameters.Keys) {
+            $value = "$($triggerParameters[$key])"
+            $parameters[$key] = if ($value -match '^\d+$') { [int]$value } else { $value }
+        }
+        $runParameters[$suffix -replace 'Trigger'] = $parameters
     }
 
     # last weeks runs. a brand new deploy wont have any till the first schedule fires
@@ -239,9 +253,51 @@ if (-not $billingScope -or -not $storage) {
     }
 }
 
+# ---- test runs ----
+if ($Test -and $pipeline) {
+    Write-Host "`nTest runs" -ForegroundColor Cyan
+
+    $modes = if ($Test -eq 'All') { 'Daily', 'Monthly' } else { $Test }
+    foreach ($mode in $modes) {
+        if (-not $runParameters.Contains($mode)) {
+            Add-Check -Name "Test run $mode" -Status Fail -Detail "No $mode trigger to copy the parameters from"
+            continue
+        }
+
+        $runId = Invoke-AzDataFactoryV2Pipeline @adf -PipelineName $pipeline.Name -Parameter ([hashtable]$runParameters[$mode])
+        Write-Host "  $mode run $runId started, waiting on it..." -ForegroundColor Gray
+
+        # first run sits for a few min while the managed runtime spins up
+        $deadline = (Get-Date).AddMinutes(30)
+        do {
+            Start-Sleep -Seconds 20
+            $run = Get-AzDataFactoryV2PipelineRun @adf -PipelineRunId $runId
+        } while (($run.Status -in 'Queued', 'InProgress', 'Canceling') -and ((Get-Date) -lt $deadline))
+
+        switch ($run.Status) {
+            'Succeeded' { Add-Check -Name "Test run $mode" -Status Pass -Detail "Succeeded, run $runId" }
+            'Failed'    { Add-Check -Name "Test run $mode" -Status Fail -Detail "Run $runId failed. $($run.Message)" }
+            default     { Add-Check -Name "Test run $mode" -Status Warn -Detail "Run $runId still $($run.Status) after 30 min" }
+        }
+    }
+}
+
 # ---- summary ----
 $failed = @($results | Where-Object Status -eq 'Fail').Count
 $warned = @($results | Where-Object Status -eq 'Warn').Count
 $passed = @($results | Where-Object Status -eq 'Pass').Count
 $color = if ($failed) { 'Red' } elseif ($warned) { 'Yellow' } else { 'Green' }
 Write-Host "`n$passed passed, $warned warnings, $failed failed" -ForegroundColor $color
+
+# ---- manual run commands ----
+if ($pipeline -and $runParameters.Count) {
+    Write-Host "`nManual runs" -ForegroundColor Cyan
+    foreach ($mode in $runParameters.Keys) {
+        $pairs = foreach ($key in $runParameters[$mode].Keys) {
+            $value = $runParameters[$mode][$key]
+            if ($value -is [int]) { "$key = $value" } else { "$key = '$value'" }
+        }
+        Write-Host "# $mode" -ForegroundColor Gray
+        Write-Host "Invoke-AzDataFactoryV2Pipeline -ResourceGroupName `"$ResourceGroupName`" -DataFactoryName `"$($factory.DataFactoryName)`" -PipelineName `"$($pipeline.Name)`" -Parameter @{ $($pairs -join '; ') }"
+    }
+}
