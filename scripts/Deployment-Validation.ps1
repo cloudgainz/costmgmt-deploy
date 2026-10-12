@@ -5,18 +5,30 @@ param(
     [string]$ResourceGroupName,
 
     [ValidateSet('Daily', 'Monthly', 'All')]
-    [string]$Test
+    [string]$Test,
+
+    [switch]$GenerateExport
 )
 
 # Checks a costmgmt-deploy resource group after a deployment.
-# Read only unless you pass -Test, which kicks off a real pipeline run and waits on it.
+# Read only unless you pass one of:
+#   -GenerateExport  runs the daily cost export now and waits for it (up to 10 min)
+#   -Test            kicks off a real pipeline run and waits on it
 #
 #   ./Deployment-Validation.ps1 -ResourceGroupName rg-contoso-costmgmt
+#   ./Deployment-Validation.ps1 -ResourceGroupName rg-contoso-costmgmt -GenerateExport
 #   ./Deployment-Validation.ps1 -ResourceGroupName rg-contoso-costmgmt -Test Daily
 
 $ErrorActionPreference = 'Stop'
+
+# the test run needs the export to have landed first, so one at a time
+if ($Test -and $GenerateExport) {
+    throw "Don't use -Test and -GenerateExport together. Run -GenerateExport first, then -Test once the export exists."
+}
+
 $results = @()
 $runParameters = [ordered]@{}
+$exports = @()
 
 function Add-Check {
     param(
@@ -249,6 +261,51 @@ if (-not $billingScope -or -not $storage) {
             if ($lastRun -and $lastRun.properties.status -eq 'Failed') { $status = 'Fail' }
             if ($status -eq 'Pass' -and $schedule.recurrence -and -not $lastRun) { $status = 'Warn' }
             Add-Check -Name "Export $($export.name)" -Status $status -Detail "$($schedule.status), $lastRunText"
+        }
+    }
+}
+
+# ---- generate the daily export ----
+if ($GenerateExport) {
+    Write-Host "`nGenerate export" -ForegroundColor Cyan
+
+    # daily only. monthly is last months data and not much use for a test
+    $daily = $exports | Where-Object { $_.name -like '*-focus-daily' } | Select-Object -First 1
+    if (-not $daily) {
+        Add-Check -Name 'Generate export' -Status Fail -Detail 'No daily export to run. See the Cost exports checks above.'
+    } else {
+        $exportPath = "$billingScope/providers/Microsoft.CostManagement/exports/$($daily.name)"
+        $destination = $daily.properties.deliveryInfo.destination
+        $landingPath = "$($storage.StorageAccountName)/$($destination.container)/$($destination.rootFolderPath)/$($daily.name)/"
+        $whereToLook = "Check Cost Management > Exports (billing profile scope) > $($daily.name) > run history, or re-run this script and read the Export line. Files land in $landingPath<yyyyMMdd-yyyyMMdd>/<guid>/"
+
+        # so we can tell our run from an older one
+        $previousRun = @($daily.properties.runHistory.value)[0]
+        $previousRunName = if ($previousRun) { $previousRun.name } else { $null }
+
+        $response = Invoke-AzRestMethod -Method POST -Path "$exportPath/run?api-version=2025-03-01"
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) {
+            Add-Check -Name 'Generate export' -Status Fail -Detail "Run request for $($daily.name) was refused (HTTP $($response.StatusCode)). $($response.Content)"
+        } else {
+            Write-Host "  $($daily.name) run requested, waiting up to 10 min..." -ForegroundColor Gray
+
+            $deadline = (Get-Date).AddMinutes(10)
+            $run = $null
+            do {
+                Start-Sleep -Seconds 30
+                $history = Invoke-AzRestMethod -Method GET -Path "$exportPath`?api-version=2025-03-01&`$expand=runHistory"
+                $latest = @(($history.Content | ConvertFrom-Json).properties.runHistory.value |
+                    Sort-Object { $_.properties.submittedTime } -Descending)[0]
+                if ($latest -and $latest.name -ne $previousRunName) { $run = $latest }
+            } while (((-not $run) -or ($run.properties.status -in 'Queued', 'InProgress')) -and ((Get-Date) -lt $deadline))
+
+            if (-not $run -or $run.properties.status -in 'Queued', 'InProgress') {
+                Add-Check -Name 'Generate export' -Status Warn -Detail "Export is still being generated. Run -Test Daily once it exists. $whereToLook"
+            } elseif ($run.properties.status -eq 'Completed') {
+                Add-Check -Name 'Generate export' -Status Pass -Detail "$($daily.name) completed. Files are under $landingPath - now run -Test Daily."
+            } else {
+                Add-Check -Name 'Generate export' -Status Fail -Detail "Export run ended $($run.properties.status). $($run.properties.error.message) $whereToLook"
+            }
         }
     }
 }
