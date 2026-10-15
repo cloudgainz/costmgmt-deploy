@@ -191,9 +191,9 @@ if (-not $factory) {
         Add-Check -Name 'Pipeline' -Status Fail -Detail 'No *-DataMoverPipeline on the factory'
     }
 
-    # both triggers should exist and be running
+    # all three triggers should exist and be running
     $triggers = @(Get-AzDataFactoryV2Trigger @adf)
-    foreach ($suffix in 'DailyTrigger', 'MonthlyTrigger') {
+    foreach ($suffix in 'DailyTrigger', 'MonthlyTrigger', 'PriceSheetTrigger') {
         $trigger = $triggers | Where-Object { $_.Name -like "*-$suffix" } | Select-Object -First 1
         if (-not $trigger) {
             Add-Check -Name "Trigger $suffix" -Status Fail -Detail 'Missing'
@@ -235,14 +235,16 @@ if (-not $factory) {
 # ---- cost exports ----
 Write-Host "`nCost exports" -ForegroundColor Cyan
 
-# these live on the billing profile, so this part needs a billing role to read
-$billingScope = Get-OutputValue -Name 'billingProfileScopeId'
+# these live on the billing profile (MCA) or enrollment (EA), so this part needs a billing role to read
+# older deployments only have billingProfileScopeId
+$billingScope = Get-OutputValue -Name 'billingScopeId'
+if (-not $billingScope) { $billingScope = Get-OutputValue -Name 'billingProfileScopeId' }
 if (-not $billingScope -or -not $storage) {
     Add-Check -Name 'Cost exports' -Status Warn -Detail 'Skipped, could not work out the billing scope from the deployment outputs'
 } else {
     $response = Invoke-AzRestMethod -Method GET -Path "$billingScope/providers/Microsoft.CostManagement/exports?api-version=2025-03-01&`$expand=runHistory"
     if ($response.StatusCode -ne 200) {
-        Add-Check -Name 'Cost exports' -Status Warn -Detail "Could not read exports on the billing profile (HTTP $($response.StatusCode)). Needs a billing role."
+        Add-Check -Name 'Cost exports' -Status Warn -Detail "Could not read exports on $billingScope (HTTP $($response.StatusCode)). Needs a billing role."
     } else {
         # only the ones that write to our storage account
         $exports = @(($response.Content | ConvertFrom-Json).value |
@@ -277,7 +279,7 @@ if ($GenerateExport) {
         $exportPath = "$billingScope/providers/Microsoft.CostManagement/exports/$($daily.name)"
         $destination = $daily.properties.deliveryInfo.destination
         $landingPath = "$($storage.StorageAccountName)/$($destination.container)/$($destination.rootFolderPath)/$($daily.name)/"
-        $whereToLook = "Check Cost Management > Exports (billing profile scope) > $($daily.name) > run history, or re-run this script and read the Export line. Files land in $landingPath<yyyyMMdd-yyyyMMdd>/<guid>/"
+        $whereToLook = "Check Cost Management > Exports (billing profile or enrollment scope) > $($daily.name) > run history, or re-run this script and read the Export line. Files land in $landingPath<yyyyMMdd-yyyyMMdd>/<guid>/"
 
         # so we can tell our run from an older one
         $previousRun = @($daily.properties.runHistory.value)[0]

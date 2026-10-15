@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "15141294381412226011"
+      "templateHash": "14950970657661395876"
     }
   },
   "parameters": {
@@ -49,19 +49,20 @@
     "billingAccountId": {
       "type": "string",
       "metadata": {
-        "description": "MCA billing account ID. Used to build the billing profile scope path."
+        "description": "Billing account ID. An EA enrollment number (all digits) or an MCA account ID (guid:guid_date). The shape decides EA vs MCA."
       }
     },
     "billingProfileId": {
       "type": "string",
+      "defaultValue": "",
       "metadata": {
-        "description": "MCA billing profile ID - the scope every export runs against."
+        "description": "MCA billing profile ID - the scope every export runs against. Ignored for EA."
       }
     },
     "exportScriptIdentityId": {
       "type": "string",
       "metadata": {
-        "description": "Resource ID of an existing user-assigned managed identity holding Billing profile contributor on the billing profile. The export scripts run as it."
+        "description": "Resource ID of an existing user-assigned managed identity holding Billing profile contributor (MCA) or Enrollment reader (EA). The export scripts run as it."
       }
     },
     "deployExports": {
@@ -80,6 +81,17 @@
       ],
       "metadata": {
         "description": "FOCUS dataset schema version for the exports."
+      }
+    },
+    "priceSheetDatasetVersion": {
+      "type": "string",
+      "defaultValue": "2023-05-01",
+      "allowedValues": [
+        "2023-05-01",
+        "2024-08-01"
+      ],
+      "metadata": {
+        "description": "Price sheet dataset version. 2023-05-01 is what the FinOps hub schemas expect."
       }
     },
     "exportFormat": {
@@ -348,16 +360,19 @@
     }
   },
   "variables": {
-    "templateVersion": "20261012075550",
+    "templateVersion": "20261015082649",
     "effectiveExportPrefix": "[if(empty(parameters('exportPrefix')), parameters('namePrefix'), parameters('exportPrefix'))]",
-    "billingProfileScopeId": "[format('/providers/Microsoft.Billing/billingAccounts/{0}/billingProfiles/{1}', parameters('billingAccountId'), parameters('billingProfileId'))]",
+    "agreementType": "[if(contains(parameters('billingAccountId'), ':'), 'MicrosoftCustomerAgreement', 'EnterpriseAgreement')]",
+    "billingAccountScopeId": "[format('/providers/Microsoft.Billing/billingAccounts/{0}', parameters('billingAccountId'))]",
+    "billingScopeId": "[if(equals(variables('agreementType'), 'EnterpriseAgreement'), variables('billingAccountScopeId'), format('{0}/billingProfiles/{1}', variables('billingAccountScopeId'), parameters('billingProfileId')))]",
     "storageAccountName": "[format('{0}{1}', parameters('namePrefix'), substring(uniqueString(resourceGroup().id), 0, 6))]",
     "onetimeFrom": "[if(empty(parameters('onetimeExportFrom')), dateTimeAdd(parameters('baseTime'), format('-P{0}D', parameters('onetimeLookbackDays')), 'yyyy-MM-ddT00:00:00Z'), parameters('onetimeExportFrom'))]",
     "onetimeTo": "[if(empty(parameters('onetimeExportTo')), dateTimeAdd(parameters('baseTime'), 'P0D', 'yyyy-MM-ddT00:00:00Z'), parameters('onetimeExportTo'))]",
     "scheduleFrom": "[dateTimeAdd(parameters('baseTime'), 'P1D', 'yyyy-MM-ddTHH:mm:ssZ')]",
     "scheduleTo": "[dateTimeAdd(parameters('baseTime'), format('P{0}Y', parameters('scheduleYears')), 'yyyy-MM-ddTHH:mm:ssZ')]",
     "dailySourcePath": "[format('focus-daily/{0}-focus-daily', variables('effectiveExportPrefix'))]",
-    "monthlySourcePath": "[format('focus-monthly/{0}-focus-monthly', variables('effectiveExportPrefix'))]"
+    "monthlySourcePath": "[format('focus-monthly/{0}-focus-monthly', variables('effectiveExportPrefix'))]",
+    "priceSheetSourcePath": "[format('pricesheet/{0}-pricesheet', variables('effectiveExportPrefix'))]"
   },
   "resources": [
     {
@@ -884,8 +899,14 @@
           "scriptIdentityId": {
             "value": "[parameters('exportScriptIdentityId')]"
           },
-          "billingProfileScopeId": {
-            "value": "[variables('billingProfileScopeId')]"
+          "billingScopeId": {
+            "value": "[variables('billingScopeId')]"
+          },
+          "billingAccountId": {
+            "value": "[parameters('billingAccountId')]"
+          },
+          "agreementType": {
+            "value": "[variables('agreementType')]"
           },
           "exportPrefix": {
             "value": "[variables('effectiveExportPrefix')]"
@@ -898,6 +919,9 @@
           },
           "focusDatasetVersion": {
             "value": "[parameters('focusDatasetVersion')]"
+          },
+          "priceSheetDatasetVersion": {
+            "value": "[parameters('priceSheetDatasetVersion')]"
           },
           "exportFormat": {
             "value": "[parameters('exportFormat')]"
@@ -934,7 +958,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "13250201729366414058"
+              "templateHash": "9102268139006625743"
             }
           },
           "parameters": {
@@ -947,8 +971,18 @@
             "scriptIdentityId": {
               "type": "string"
             },
-            "billingProfileScopeId": {
+            "billingScopeId": {
               "type": "string"
+            },
+            "billingAccountId": {
+              "type": "string"
+            },
+            "agreementType": {
+              "type": "string",
+              "allowedValues": [
+                "EnterpriseAgreement",
+                "MicrosoftCustomerAgreement"
+              ]
             },
             "exportPrefix": {
               "type": "string"
@@ -960,6 +994,9 @@
               "type": "string"
             },
             "focusDatasetVersion": {
+              "type": "string"
+            },
+            "priceSheetDatasetVersion": {
               "type": "string"
             },
             "exportFormat": {
@@ -1016,7 +1053,15 @@
                 "environmentVariables": [
                   {
                     "name": "SCOPE",
-                    "value": "[parameters('billingProfileScopeId')]"
+                    "value": "[parameters('billingScopeId')]"
+                  },
+                  {
+                    "name": "BILLING_ACCOUNT",
+                    "value": "[parameters('billingAccountId')]"
+                  },
+                  {
+                    "name": "AGREEMENT",
+                    "value": "[parameters('agreementType')]"
                   },
                   {
                     "name": "EXPORT_PREFIX",
@@ -1033,6 +1078,10 @@
                   {
                     "name": "DATASET_VERSION",
                     "value": "[parameters('focusDatasetVersion')]"
+                  },
+                  {
+                    "name": "PRICESHEET_VERSION",
+                    "value": "[parameters('priceSheetDatasetVersion')]"
                   },
                   {
                     "name": "EXPORT_FORMAT",
@@ -1071,7 +1120,7 @@
                     "value": "[parameters('location')]"
                   }
                 ],
-                "scriptContent": "set -euo pipefail\nAPI=\"2025-03-01\"\nBASE=\"https://management.azure.com${SCOPE}/providers/Microsoft.CostManagement/exports\"\n\n# one-time export window sanity check - the API caps a Custom timeframe at a\n# calendar month and silently does odd things past that.\n# jq not date - the script image's date chokes on ISO timestamps\n# FROM_S=$(date -u -d \"$ONETIME_FROM\" +%s)\n# TO_S=$(date -u -d \"$ONETIME_TO\" +%s)\nFROM_S=$(jq -rn --arg d \"$ONETIME_FROM\" '$d | fromdateiso8601')\nTO_S=$(jq -rn --arg d \"$ONETIME_TO\" '$d | fromdateiso8601')\nif [ \"$TO_S\" -le \"$FROM_S\" ]; then\n  echo \"ERROR: onetime window must run forwards ($ONETIME_FROM -> $ONETIME_TO)\" >&2\n  exit 1\nfi\nif [ $(( TO_S - FROM_S )) -gt 2678400 ]; then\n  echo \"ERROR: onetime window can't be longer than 31 days\" >&2\n  exit 1\nfi\n\n# az rest with retries. Covers dropped connections (RemoteDisconnected) and\n# the identity's fresh storage role taking a few minutes to kick in.\naz_rest() {\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    if az rest \"$@\"; then return 0; fi\n    [ \"$try\" -lt 10 ] && { echo \"az rest failed, retrying in 30s ($try/10)\" >&2; sleep 30; }\n  done\n  return 1\n}\n\n# put_export <key> <timeframe> <recurrence|\"\"> <status> <rootFolder> <description>\nput_export() {\n  key=\"$1\"; timeframe=\"$2\"; recurrence=\"$3\"; status=\"$4\"; folder=\"$5\"; desc=\"$6\"\n  name=\"${EXPORT_PREFIX}-${key}\"\n\n  definition=$(jq -n --arg tf \"$timeframe\" --arg dv \"$DATASET_VERSION\" \\\n    '{type:\"FocusCost\", timeframe:$tf, dataSet:{granularity:\"Daily\", configuration:{dataVersion:$dv}}}')\n\n  # timePeriod only goes on the Custom (one-time) export\n  if [ \"$timeframe\" = \"Custom\" ]; then\n    definition=$(echo \"$definition\" | jq --arg f \"$ONETIME_FROM\" --arg t \"$ONETIME_TO\" \\\n      '. + {timePeriod:{from:$f, to:$t}}')\n  fi\n\n  # One-time exports take status and NOTHING else - the API rejects a\n  # recurrence member even when it's null, so we leave the keys off entirely.\n  if [ -z \"$recurrence\" ]; then\n    schedule=$(jq -n --arg s \"$status\" '{status:$s}')\n  else\n    schedule=$(jq -n --arg s \"$status\" --arg r \"$recurrence\" --arg f \"$SCHEDULE_FROM\" --arg t \"$SCHEDULE_TO\" \\\n      '{status:$s, recurrence:$r, recurrencePeriod:{from:$f, to:$t}}')\n  fi\n\n  body=$(jq -n \\\n    --arg loc \"$EXPORT_LOCATION\" --arg d \"$desc\" --arg fmt \"$EXPORT_FORMAT\" \\\n    --arg cm \"$COMPRESSION_MODE\" --argjson pd \"$PARTITION_DATA\" --arg dob \"$DATA_OVERWRITE\" \\\n    --arg sa \"$STORAGE_ACCOUNT_ID\" --arg c \"$CONTAINER_NAME\" --arg rf \"$folder\" \\\n    --argjson def \"$definition\" --argjson sched \"$schedule\" \\\n    '{\n      identity: {type:\"SystemAssigned\"},\n      location: $loc,\n      properties: {\n        exportDescription: $d,\n        format: $fmt,\n        compressionMode: $cm,\n        partitionData: $pd,\n        dataOverwriteBehavior: $dob,\n        definition: $def,\n        deliveryInfo: {destination: {type:\"AzureBlob\", resourceId:$sa, container:$c, rootFolderPath:$rf}},\n        schedule: $sched\n      }\n    }')\n\n  echo \"PUT $name (root=$folder, timeframe=$timeframe, recurrence=${recurrence:-none})\"\n  # print what Azure actually said, not az's \"please az login\" noise\n  if ! az_rest --method put --url \"${BASE}/${name}?api-version=${API}\" \\\n    --headers \"Content-Type=application/json\" --body \"$body\" > \"/tmp/${name}.json\" 2> \"/tmp/${name}.err\"; then\n    echo \"ERROR: could not create export $name after 10 tries. Last error from Azure: $(grep -v 'Interactive authentication\\|az logout\\|az login\\|retrying in' \"/tmp/${name}.err\" | tail -1)\" >&2\n    exit 1\n  fi\n\n  # principalId is sometimes not on the PUT response yet, so poll the GET\n  pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n  tries=0\n  while [ -z \"$pid\" ] && [ \"$tries\" -lt 10 ]; do\n    sleep 5\n    az_rest --method get --url \"${BASE}/${name}?api-version=${API}\" > \"/tmp/${name}.json\" || true\n    pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n    tries=$((tries+1))\n  done\n  if [ -z \"$pid\" ]; then\n    echo \"ERROR: no managed identity principalId came back for $name\" >&2\n    exit 1\n  fi\n  echo \"$pid\" >> /tmp/principals.txt\n}\n\n: > /tmp/principals.txt\n\n# All three are FocusCost - only the timeframe and schedule differ. The one-time\n# one has an inactive schedule so it never fires on its own, you kick it off with\n# Run now in the portal or the Execute API.\nput_export \"focus-onetime\" \"Custom\"       \"\"        \"Inactive\" \"focus-onetime\" \"One-time FOCUS cost and usage details\"\nput_export \"focus-daily\"   \"MonthToDate\"  \"Daily\"   \"Active\"   \"focus-daily\"   \"Daily FOCUS cost and usage details, month to date\"\nput_export \"focus-monthly\" \"TheLastMonth\" \"Monthly\" \"Active\"   \"focus-monthly\" \"Monthly FOCUS cost and usage details for last month\"\n\njq -R -s 'split(\"\\n\") | map(select(length > 0))' /tmp/principals.txt \\\n  | jq '{principalIds: .}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n\necho \"done - $(wc -l < /tmp/principals.txt) exports created\"\n"
+                "scriptContent": "set -euo pipefail\nAPI=\"2025-03-01\"\nBASE=\"https://management.azure.com${SCOPE}/providers/Microsoft.CostManagement/exports\"\n\n# EA vs MCA comes from the account id shape, check it against the billing api.\n# not every identity can read the account so a blank answer just gets logged\nACCT_TYPE=$(az rest --method get --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/${BILLING_ACCOUNT}?api-version=2024-04-01\" --query properties.agreementType -o tsv 2>/dev/null || true)\necho \"billing account says ${ACCT_TYPE:-nothing (no read access)}, deploying as $AGREEMENT on $SCOPE\"\nif [ -n \"$ACCT_TYPE\" ] && [ \"$ACCT_TYPE\" != \"$AGREEMENT\" ]; then\n  echo \"ERROR: billing account $BILLING_ACCOUNT is $ACCT_TYPE. Only EA (enrollment number) and MCA (with a billing profile) are supported.\" >&2\n  exit 1\nfi\nif [ \"$AGREEMENT\" = \"MicrosoftCustomerAgreement\" ] && [[ \"$SCOPE\" == */billingProfiles/ ]]; then\n  echo \"ERROR: MCA billing account but no billing profile ID was given\" >&2\n  exit 1\nfi\n\n# one-time export window sanity check - the API caps a Custom timeframe at a\n# calendar month and silently does odd things past that.\n# jq not date - the script image's date chokes on ISO timestamps\n# FROM_S=$(date -u -d \"$ONETIME_FROM\" +%s)\n# TO_S=$(date -u -d \"$ONETIME_TO\" +%s)\nFROM_S=$(jq -rn --arg d \"$ONETIME_FROM\" '$d | fromdateiso8601')\nTO_S=$(jq -rn --arg d \"$ONETIME_TO\" '$d | fromdateiso8601')\nif [ \"$TO_S\" -le \"$FROM_S\" ]; then\n  echo \"ERROR: onetime window must run forwards ($ONETIME_FROM -> $ONETIME_TO)\" >&2\n  exit 1\nfi\nif [ $(( TO_S - FROM_S )) -gt 2678400 ]; then\n  echo \"ERROR: onetime window can't be longer than 31 days\" >&2\n  exit 1\nfi\n\n# az rest with retries. Covers dropped connections (RemoteDisconnected) and\n# the identity's fresh storage role taking a few minutes to kick in.\naz_rest() {\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    if az rest \"$@\"; then return 0; fi\n    [ \"$try\" -lt 10 ] && { echo \"az rest failed, retrying in 30s ($try/10)\" >&2; sleep 30; }\n  done\n  return 1\n}\n\n# put_export <key> <type> <dataVersion> <timeframe> <recurrence|\"\"> <status> <rootFolder> <description>\nput_export() {\n  key=\"$1\"; type=\"$2\"; dv=\"$3\"; timeframe=\"$4\"; recurrence=\"$5\"; status=\"$6\"; folder=\"$7\"; desc=\"$8\"\n  name=\"${EXPORT_PREFIX}-${key}\"\n\n  # definition=$(jq -n --arg tf \"$timeframe\" --arg dv \"$DATASET_VERSION\" \\\n  #   '{type:\"FocusCost\", timeframe:$tf, dataSet:{granularity:\"Daily\", configuration:{dataVersion:$dv}}}')\n  definition=$(jq -n --arg ty \"$type\" --arg tf \"$timeframe\" --arg dv \"$dv\" \\\n    '{type:$ty, timeframe:$tf, dataSet:{configuration:{dataVersion:$dv}}}')\n\n  # price sheet doesnt take a granularity, the api rejects it\n  if [ \"$type\" = \"FocusCost\" ]; then\n    definition=$(echo \"$definition\" | jq '.dataSet.granularity = \"Daily\"')\n  fi\n\n  # timePeriod only goes on the Custom (one-time) export\n  if [ \"$timeframe\" = \"Custom\" ]; then\n    definition=$(echo \"$definition\" | jq --arg f \"$ONETIME_FROM\" --arg t \"$ONETIME_TO\" \\\n      '. + {timePeriod:{from:$f, to:$t}}')\n  fi\n\n  # One-time exports take status and NOTHING else - the API rejects a\n  # recurrence member even when it's null, so we leave the keys off entirely.\n  if [ -z \"$recurrence\" ]; then\n    schedule=$(jq -n --arg s \"$status\" '{status:$s}')\n  else\n    schedule=$(jq -n --arg s \"$status\" --arg r \"$recurrence\" --arg f \"$SCHEDULE_FROM\" --arg t \"$SCHEDULE_TO\" \\\n      '{status:$s, recurrence:$r, recurrencePeriod:{from:$f, to:$t}}')\n  fi\n\n  body=$(jq -n \\\n    --arg loc \"$EXPORT_LOCATION\" --arg d \"$desc\" --arg fmt \"$EXPORT_FORMAT\" \\\n    --arg cm \"$COMPRESSION_MODE\" --argjson pd \"$PARTITION_DATA\" --arg dob \"$DATA_OVERWRITE\" \\\n    --arg sa \"$STORAGE_ACCOUNT_ID\" --arg c \"$CONTAINER_NAME\" --arg rf \"$folder\" \\\n    --argjson def \"$definition\" --argjson sched \"$schedule\" \\\n    '{\n      identity: {type:\"SystemAssigned\"},\n      location: $loc,\n      properties: {\n        exportDescription: $d,\n        format: $fmt,\n        compressionMode: $cm,\n        partitionData: $pd,\n        dataOverwriteBehavior: $dob,\n        definition: $def,\n        deliveryInfo: {destination: {type:\"AzureBlob\", resourceId:$sa, container:$c, rootFolderPath:$rf}},\n        schedule: $sched\n      }\n    }')\n\n  echo \"PUT $name (root=$folder, timeframe=$timeframe, recurrence=${recurrence:-none})\"\n  # print what Azure actually said, not az's \"please az login\" noise\n  if ! az_rest --method put --url \"${BASE}/${name}?api-version=${API}\" \\\n    --headers \"Content-Type=application/json\" --body \"$body\" > \"/tmp/${name}.json\" 2> \"/tmp/${name}.err\"; then\n    echo \"ERROR: could not create export $name after 10 tries. Last error from Azure: $(grep -v 'Interactive authentication\\|az logout\\|az login\\|retrying in' \"/tmp/${name}.err\" | tail -1)\" >&2\n    exit 1\n  fi\n\n  # principalId is sometimes not on the PUT response yet, so poll the GET\n  pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n  tries=0\n  while [ -z \"$pid\" ] && [ \"$tries\" -lt 10 ]; do\n    sleep 5\n    az_rest --method get --url \"${BASE}/${name}?api-version=${API}\" > \"/tmp/${name}.json\" || true\n    pid=$(jq -r '.identity.principalId // empty' \"/tmp/${name}.json\")\n    tries=$((tries+1))\n  done\n  if [ -z \"$pid\" ]; then\n    echo \"ERROR: no managed identity principalId came back for $name\" >&2\n    exit 1\n  fi\n  echo \"$pid\" >> /tmp/principals.txt\n}\n\n: > /tmp/principals.txt\n\n# The three FOCUS ones only differ by timeframe and schedule. The one-time one\n# has an inactive schedule so it never fires on its own, you kick it off with\n# Run now in the portal or the Execute API.\n# Price sheet runs daily for the current month, same as the finops toolkit does\nput_export \"focus-onetime\" \"FocusCost\"  \"$DATASET_VERSION\"    \"Custom\"          \"\"        \"Inactive\" \"focus-onetime\" \"One-time FOCUS cost and usage details\"\nput_export \"focus-daily\"   \"FocusCost\"  \"$DATASET_VERSION\"    \"MonthToDate\"     \"Daily\"   \"Active\"   \"focus-daily\"   \"Daily FOCUS cost and usage details, month to date\"\nput_export \"focus-monthly\" \"FocusCost\"  \"$DATASET_VERSION\"    \"TheLastMonth\"    \"Monthly\" \"Active\"   \"focus-monthly\" \"Monthly FOCUS cost and usage details for last month\"\nput_export \"pricesheet\"    \"PriceSheet\" \"$PRICESHEET_VERSION\" \"TheCurrentMonth\" \"Daily\"   \"Active\"   \"pricesheet\"    \"Price sheet for the current month\"\n\njq -R -s 'split(\"\\n\") | map(select(length > 0))' /tmp/principals.txt \\\n  | jq '{principalIds: .}' > \"$AZ_SCRIPTS_OUTPUT_PATH\"\n\necho \"done - $(wc -l < /tmp/principals.txt) exports created\"\n"
               }
             }
           ],
@@ -1186,6 +1235,9 @@
           "monthlySourcePath": {
             "value": "[variables('monthlySourcePath')]"
           },
+          "priceSheetSourcePath": {
+            "value": "[variables('priceSheetSourcePath')]"
+          },
           "customerStorageAccount": {
             "value": "[parameters('customerStorageAccount')]"
           },
@@ -1222,7 +1274,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "5373010259676550957"
+              "templateHash": "10235952255402566666"
             }
           },
           "parameters": {
@@ -1254,6 +1306,12 @@
               "type": "string",
               "metadata": {
                 "description": "Full prefix under the source container the monthly trigger mirrors, e.g. focus-monthly/cgcm-focus-monthly"
+              }
+            },
+            "priceSheetSourcePath": {
+              "type": "string",
+              "metadata": {
+                "description": "Full prefix under the source container the price sheet trigger mirrors, e.g. pricesheet/cgcm-pricesheet"
               }
             },
             "customerStorageAccount": {
@@ -1306,6 +1364,7 @@
             "pipelineName": "[format('{0}-DataMoverPipeline', parameters('siteName'))]",
             "dailyTriggerName": "[format('{0}-DailyTrigger', parameters('siteName'))]",
             "monthlyTriggerName": "[format('{0}-MonthlyTrigger', parameters('siteName'))]",
+            "priceSheetTriggerName": "[format('{0}-PriceSheetTrigger', parameters('siteName'))]",
             "irName": "[format('{0}-ManagedIR', parameters('siteName'))]",
             "managedPeName": "[format('{0}-SourceStoragePE', parameters('siteName'))]",
             "sourceLinkedServiceName": "SourceStorage",
@@ -1336,6 +1395,7 @@
               "SourceFolder": "",
               "DailiesFolder": "[parameters('dailySourcePath')]",
               "MonthliesFolder": "[parameters('monthlySourcePath')]",
+              "PriceSheetFolder": "[parameters('priceSheetSourcePath')]",
               "DestStorage": "[parameters('customerStorageAccount')]",
               "DestContainer": "[variables('destContainerName')]",
               "DestFolder": "",
@@ -1346,6 +1406,7 @@
               "MonthlyTrigger": "[variables('monthlyTriggerName')]",
               "MonthlyDayOfMonth": "[parameters('monthlyDayOfMonth')]",
               "MonthlyRunTime": "[parameters('monthlyRunTime')]",
+              "PriceSheetTrigger": "[variables('priceSheetTriggerName')]",
               "CatchupCutoffDay": "[parameters('catchupCutoffDay')]",
               "IntegrationRuntime": "[if(variables('usePrivateEndpoint'), variables('irName'), 'AutoResolveIntegrationRuntime')]",
               "PrivateEndpoint": "[if(variables('usePrivateEndpoint'), variables('managedPeName'), '')]",
@@ -1353,7 +1414,7 @@
               "WebhookStatus": "disabled",
               "WebhookDisabledReason": "Deployed from the portal template, no app registration gets created."
             },
-            "targetDateExpr": "[format('@addDays(convertTimeZone(utcnow(), ''UTC'', ''{0}''), mul(-1, pipeline().parameters.catchupDays))', parameters('timeZone'))]",
+            "targetDateExpr": "[format('@if(equals(pipeline().parameters.monthOffset, 0), addDays(convertTimeZone(utcnow(), ''UTC'', ''{0}''), mul(-1, pipeline().parameters.catchupDays)), subtractFromTime(addDays(convertTimeZone(utcnow(), ''UTC'', ''{1}''), mul(-1, pipeline().parameters.catchupDays)), 1, ''Month''))', parameters('timeZone'), parameters('timeZone'))]",
             "dateRangeExpr": "@concat(formatDateTime(startOfMonth(variables('targetDate')), 'yyyyMMdd'), '-', formatDateTime(addDays(addToTime(startOfMonth(variables('targetDate')), 1, 'Month'), -1), 'yyyyMMdd'))",
             "dateRangeFolderExpr": "@concat(pipeline().parameters.sourceFolderPath, '/', variables('dateRange'))",
             "logBlobUrlExpr": "[format('@concat(''https://{0}.blob.core.windows.net/logs/{1}-'', pipeline().parameters.mode, ''-'', pipeline().RunId, ''.json?{2}'')', parameters('customerStorageAccount'), parameters('siteName'), parameters('customerToken'))]",
@@ -1368,6 +1429,7 @@
               "sourceFolder": "@{pipeline().parameters.sourceFolderPath}",
               "dateRange": "@{variables('dateRange')}",
               "catchupDays": "@{pipeline().parameters.catchupDays}",
+              "monthOffset": "@{pipeline().parameters.monthOffset}",
               "triggerTime": "@{string(pipeline().TriggerTime)}",
               "status": "Succeeded",
               "guidFoldersCopied": "@{length(activity('FilterSourceGuids').output.Value)}"
@@ -1587,6 +1649,10 @@
                   "catchupDays": {
                     "type": "Int",
                     "defaultValue": "[parameters('catchupCutoffDay')]"
+                  },
+                  "monthOffset": {
+                    "type": "Int",
+                    "defaultValue": 0
                   },
                   "mode": {
                     "type": "String",
@@ -1952,9 +2018,13 @@
                   {
                     "name": "MONTHLY_TRIGGER",
                     "value": "[variables('monthlyTriggerName')]"
+                  },
+                  {
+                    "name": "PRICESHEET_TRIGGER",
+                    "value": "[variables('priceSheetTriggerName')]"
                   }
                 ],
-                "scriptContent": "set -euo pipefail\nAPI=\"2018-06-01\"\nBASE=\"https://management.azure.com${FACTORY_ID}/triggers\"\n\nfor t in \"$DAILY_TRIGGER\" \"$MONTHLY_TRIGGER\"; do\n  # first deploy theres no factory yet, this just comes back empty\n  state=$(az rest --method get --url \"${BASE}/${t}?api-version=${API}\" --query properties.runtimeState -o tsv 2>/dev/null || true)\n  if [ \"$state\" != \"Started\" ]; then\n    echo \"$t not running (${state:-not found}), nothing to stop\"\n    continue\n  fi\n\n  echo \"stopping $t\"\n  az rest --method post --url \"${BASE}/${t}/stop?api-version=${API}\"\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    state=$(az rest --method get --url \"${BASE}/${t}?api-version=${API}\" --query properties.runtimeState -o tsv)\n    [ \"$state\" = \"Stopped\" ] && break\n    sleep 5\n  done\n  echo \"$t is $state\"\ndone\n"
+                "scriptContent": "set -euo pipefail\nAPI=\"2018-06-01\"\nBASE=\"https://management.azure.com${FACTORY_ID}/triggers\"\n\nfor t in \"$DAILY_TRIGGER\" \"$MONTHLY_TRIGGER\" \"$PRICESHEET_TRIGGER\"; do\n  # first deploy theres no factory yet, this just comes back empty\n  state=$(az rest --method get --url \"${BASE}/${t}?api-version=${API}\" --query properties.runtimeState -o tsv 2>/dev/null || true)\n  if [ \"$state\" != \"Started\" ]; then\n    echo \"$t not running (${state:-not found}), nothing to stop\"\n    continue\n  fi\n\n  echo \"stopping $t\"\n  az rest --method post --url \"${BASE}/${t}/stop?api-version=${API}\"\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    state=$(az rest --method get --url \"${BASE}/${t}?api-version=${API}\" --query properties.runtimeState -o tsv)\n    [ \"$state\" = \"Stopped\" ] && break\n    sleep 5\n  done\n  echo \"$t is $state\"\ndone\n"
               }
             },
             {
@@ -1988,6 +2058,7 @@
                     "parameters": {
                       "sourceFolderPath": "[parameters('dailySourcePath')]",
                       "catchupDays": "[parameters('catchupCutoffDay')]",
+                      "monthOffset": 0,
                       "mode": "daily"
                     }
                   }
@@ -2032,8 +2103,52 @@
                     },
                     "parameters": {
                       "sourceFolderPath": "[parameters('monthlySourcePath')]",
-                      "catchupDays": "[parameters('catchupCutoffDay')]",
+                      "catchupDays": 0,
+                      "monthOffset": -1,
                       "mode": "monthly"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/pipelines', variables('dataFactoryName'), variables('pipelineName'))]",
+                "[resourceId('Microsoft.Resources/deploymentScripts', 'stop-adf-triggers')]"
+              ]
+            },
+            {
+              "type": "Microsoft.DataFactory/factories/triggers",
+              "apiVersion": "2018-06-01",
+              "name": "[format('{0}/{1}', variables('dataFactoryName'), variables('priceSheetTriggerName'))]",
+              "properties": {
+                "type": "ScheduleTrigger",
+                "typeProperties": {
+                  "recurrence": {
+                    "frequency": "Day",
+                    "interval": 1,
+                    "startTime": "[variables('startTimeIso')]",
+                    "timeZone": "[parameters('timeZone')]",
+                    "schedule": {
+                      "hours": [
+                        "[variables('dailyHour')]"
+                      ],
+                      "minutes": [
+                        "[variables('dailyMinute')]"
+                      ]
+                    }
+                  }
+                },
+                "pipelines": [
+                  {
+                    "pipelineReference": {
+                      "referenceName": "[variables('pipelineName')]",
+                      "type": "PipelineReference"
+                    },
+                    "parameters": {
+                      "sourceFolderPath": "[parameters('priceSheetSourcePath')]",
+                      "catchupDays": "[parameters('catchupCutoffDay')]",
+                      "monthOffset": 0,
+                      "mode": "pricesheet"
                     }
                   }
                 ]
@@ -2089,6 +2204,10 @@
                     "value": "[variables('monthlyTriggerName')]"
                   },
                   {
+                    "name": "PRICESHEET_TRIGGER",
+                    "value": "[variables('priceSheetTriggerName')]"
+                  },
+                  {
                     "name": "SITE_NAME",
                     "value": "[parameters('siteName')]"
                   },
@@ -2105,12 +2224,13 @@
                     "value": "[string(variables('results'))]"
                   }
                 ],
-                "scriptContent": "set -euo pipefail\nARM=\"https://management.azure.com\"\nADF_API=\"2018-06-01\"\nSTG_API=\"2023-05-01\"\n\n# same retry wrapper as the export script. the factory role is brand new on a\n# first deploy and takes a few minutes to kick in.\naz_rest() {\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    if az rest \"$@\"; then return 0; fi\n    [ \"$try\" -lt 10 ] && { echo \"az rest failed, retrying in 30s ($try/10)\" >&2; sleep 30; }\n  done\n  return 1\n}\n\n# ---- approve the managed private endpoint ----\n\nif [ \"$USE_PE\" = \"true\" ]; then\n  PE_URL=\"${ARM}${FACTORY_ID}/managedVirtualNetworks/default/managedPrivateEndpoints/${MANAGED_PE_NAME}?api-version=${ADF_API}\"\n  pe_status() { az_rest --method get --url \"$PE_URL\" --query properties.connectionState.status -o tsv; }\n\n  status=$(pe_status)\n  if [ \"$status\" = \"Approved\" ]; then\n    echo \"$MANAGED_PE_NAME already approved\"\n  else\n    # find our connection on the storage account. it can take a bit to show up.\n    conn=\"\"\n    for n in 1 2 3 4 5 6 7 8 9 10 11 12; do\n      az_rest --method get --url \"${ARM}${STORAGE_ID}/privateEndpointConnections?api-version=${STG_API}\" > /tmp/conns.json\n      # ours has the managed PE name in the endpoint id\n      conn=$(jq -c --arg pe \"$MANAGED_PE_NAME\" \\\n        '[.value[] | select((.properties.privateEndpoint.id // \"\") | ascii_downcase | contains($pe | ascii_downcase))][0] // empty' /tmp/conns.json)\n      # no name match - take the pending one, but only if theres exactly one\n      if [ -z \"$conn\" ]; then\n        conn=$(jq -c '[.value[] | select(.properties.privateLinkServiceConnectionState.status == \"Pending\")] | if length == 1 then .[0] else empty end' /tmp/conns.json)\n      fi\n      [ -n \"$conn\" ] && break\n      echo \"connection not on the storage account yet, waiting ($n/12)\"\n      sleep 10\n    done\n\n    if [ -z \"$conn\" ]; then\n      echo \"ERROR: could not find the private endpoint connection for $MANAGED_PE_NAME. Connections on the account:\" >&2\n      jq -r '.value[] | \"  \\(.name)  \\(.properties.privateLinkServiceConnectionState.status)\"' /tmp/conns.json >&2\n      exit 1\n    fi\n\n    conn_id=$(echo \"$conn\" | jq -r '.id')\n    conn_state=$(echo \"$conn\" | jq -r '.properties.privateLinkServiceConnectionState.status')\n    if [ \"$conn_state\" != \"Approved\" ]; then\n      echo \"approving $conn_id\"\n      az_rest --method put --url \"${ARM}${conn_id}?api-version=${STG_API}\" \\\n        --headers \"Content-Type=application/json\" \\\n        --body '{\"properties\":{\"privateLinkServiceConnectionState\":{\"status\":\"Approved\",\"description\":\"Approved by the cost management deployment\"}}}' > /dev/null\n    fi\n\n    # the factory takes a minute or two to notice\n    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do\n      status=$(pe_status)\n      [ \"$status\" = \"Approved\" ] && break\n      echo \"factory still shows $MANAGED_PE_NAME as ${status:-unknown}, waiting ($n/30)\"\n      sleep 20\n    done\n    if [ \"$status\" = \"Approved\" ]; then\n      echo \"$MANAGED_PE_NAME approved\"\n    else\n      echo \"WARNING: approved on the storage account but the factory still says ${status:-unknown}. Starting the triggers anyway.\" >&2\n    fi\n  fi\nfi\n\n# ---- start the triggers ----\n\nfor t in \"$DAILY_TRIGGER\" \"$MONTHLY_TRIGGER\"; do\n  echo \"starting $t\"\n  az_rest --method post --url \"${ARM}${FACTORY_ID}/triggers/${t}/start?api-version=${ADF_API}\"\ndone\n\n# ---- results file ----\n\n# Setup-DataFactory.ps1 nulls these out when theres no webhook SP, so same here\necho \"$RESULTS_JSON\" | jq '.PrivateEndpoint |= (if . == \"\" then null else . end)\n  | . + {WebhookSPName: null, WebhookTenantId: null, WebhookClientId: null, WebhookClientSecret: null, WebhookTriggerUri: null}' > /tmp/results.json\n\n# dont fail the whole deployment over this one\nif az storage blob upload --account-name \"$CUSTOMER_ACCOUNT\" --sas-token \"${CUSTOMER_TOKEN#\\?}\" \\\n     --container-name runbooks --name \"${SITE_NAME}-datafactory.json\" --file /tmp/results.json \\\n     --overwrite --only-show-errors > /dev/null; then\n  echo \"results uploaded to ${CUSTOMER_ACCOUNT}/runbooks/${SITE_NAME}-datafactory.json\"\nelse\n  echo \"WARNING: could not upload the results file. Is there a runbooks container on ${CUSTOMER_ACCOUNT}?\" >&2\nfi\n\necho \"done\"\n"
+                "scriptContent": "set -euo pipefail\nARM=\"https://management.azure.com\"\nADF_API=\"2018-06-01\"\nSTG_API=\"2023-05-01\"\n\n# same retry wrapper as the export script. the factory role is brand new on a\n# first deploy and takes a few minutes to kick in.\naz_rest() {\n  for try in 1 2 3 4 5 6 7 8 9 10; do\n    if az rest \"$@\"; then return 0; fi\n    [ \"$try\" -lt 10 ] && { echo \"az rest failed, retrying in 30s ($try/10)\" >&2; sleep 30; }\n  done\n  return 1\n}\n\n# ---- approve the managed private endpoint ----\n\nif [ \"$USE_PE\" = \"true\" ]; then\n  PE_URL=\"${ARM}${FACTORY_ID}/managedVirtualNetworks/default/managedPrivateEndpoints/${MANAGED_PE_NAME}?api-version=${ADF_API}\"\n  pe_status() { az_rest --method get --url \"$PE_URL\" --query properties.connectionState.status -o tsv; }\n\n  status=$(pe_status)\n  if [ \"$status\" = \"Approved\" ]; then\n    echo \"$MANAGED_PE_NAME already approved\"\n  else\n    # find our connection on the storage account. it can take a bit to show up.\n    conn=\"\"\n    for n in 1 2 3 4 5 6 7 8 9 10 11 12; do\n      az_rest --method get --url \"${ARM}${STORAGE_ID}/privateEndpointConnections?api-version=${STG_API}\" > /tmp/conns.json\n      # ours has the managed PE name in the endpoint id\n      conn=$(jq -c --arg pe \"$MANAGED_PE_NAME\" \\\n        '[.value[] | select((.properties.privateEndpoint.id // \"\") | ascii_downcase | contains($pe | ascii_downcase))][0] // empty' /tmp/conns.json)\n      # no name match - take the pending one, but only if theres exactly one\n      if [ -z \"$conn\" ]; then\n        conn=$(jq -c '[.value[] | select(.properties.privateLinkServiceConnectionState.status == \"Pending\")] | if length == 1 then .[0] else empty end' /tmp/conns.json)\n      fi\n      [ -n \"$conn\" ] && break\n      echo \"connection not on the storage account yet, waiting ($n/12)\"\n      sleep 10\n    done\n\n    if [ -z \"$conn\" ]; then\n      echo \"ERROR: could not find the private endpoint connection for $MANAGED_PE_NAME. Connections on the account:\" >&2\n      jq -r '.value[] | \"  \\(.name)  \\(.properties.privateLinkServiceConnectionState.status)\"' /tmp/conns.json >&2\n      exit 1\n    fi\n\n    conn_id=$(echo \"$conn\" | jq -r '.id')\n    conn_state=$(echo \"$conn\" | jq -r '.properties.privateLinkServiceConnectionState.status')\n    if [ \"$conn_state\" != \"Approved\" ]; then\n      echo \"approving $conn_id\"\n      az_rest --method put --url \"${ARM}${conn_id}?api-version=${STG_API}\" \\\n        --headers \"Content-Type=application/json\" \\\n        --body '{\"properties\":{\"privateLinkServiceConnectionState\":{\"status\":\"Approved\",\"description\":\"Approved by the cost management deployment\"}}}' > /dev/null\n    fi\n\n    # the factory takes a minute or two to notice\n    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do\n      status=$(pe_status)\n      [ \"$status\" = \"Approved\" ] && break\n      echo \"factory still shows $MANAGED_PE_NAME as ${status:-unknown}, waiting ($n/30)\"\n      sleep 20\n    done\n    if [ \"$status\" = \"Approved\" ]; then\n      echo \"$MANAGED_PE_NAME approved\"\n    else\n      echo \"WARNING: approved on the storage account but the factory still says ${status:-unknown}. Starting the triggers anyway.\" >&2\n    fi\n  fi\nfi\n\n# ---- start the triggers ----\n\nfor t in \"$DAILY_TRIGGER\" \"$MONTHLY_TRIGGER\" \"$PRICESHEET_TRIGGER\"; do\n  echo \"starting $t\"\n  az_rest --method post --url \"${ARM}${FACTORY_ID}/triggers/${t}/start?api-version=${ADF_API}\"\ndone\n\n# ---- results file ----\n\n# Setup-DataFactory.ps1 nulls these out when theres no webhook SP, so same here\necho \"$RESULTS_JSON\" | jq '.PrivateEndpoint |= (if . == \"\" then null else . end)\n  | . + {WebhookSPName: null, WebhookTenantId: null, WebhookClientId: null, WebhookClientSecret: null, WebhookTriggerUri: null}' > /tmp/results.json\n\n# dont fail the whole deployment over this one\nif az storage blob upload --account-name \"$CUSTOMER_ACCOUNT\" --sas-token \"${CUSTOMER_TOKEN#\\?}\" \\\n     --container-name runbooks --name \"${SITE_NAME}-datafactory.json\" --file /tmp/results.json \\\n     --overwrite --only-show-errors > /dev/null; then\n  echo \"results uploaded to ${CUSTOMER_ACCOUNT}/runbooks/${SITE_NAME}-datafactory.json\"\nelse\n  echo \"WARNING: could not upload the results file. Is there a runbooks container on ${CUSTOMER_ACCOUNT}?\" >&2\nfi\n\necho \"done\"\n"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.DataFactory/factories/triggers', variables('dataFactoryName'), variables('dailyTriggerName'))]",
                 "[resourceId('Microsoft.DataFactory/factories/managedVirtualNetworks/managedPrivateEndpoints', variables('dataFactoryName'), 'default', variables('managedPeName'))]",
                 "[resourceId('Microsoft.DataFactory/factories/triggers', variables('dataFactoryName'), variables('monthlyTriggerName'))]",
+                "[resourceId('Microsoft.DataFactory/factories/triggers', variables('dataFactoryName'), variables('priceSheetTriggerName'))]",
                 "[extensionResourceId(resourceId('Microsoft.DataFactory/factories', variables('dataFactoryName')), 'Microsoft.Authorization/roleAssignments', guid(variables('factoryId'), parameters('scriptIdentityId'), variables('dataFactoryContributorRoleId')))]"
               ]
             }
@@ -2139,6 +2259,10 @@
             "monthlyTriggerName": {
               "type": "string",
               "value": "[variables('monthlyTriggerName')]"
+            },
+            "priceSheetTriggerName": {
+              "type": "string",
+              "value": "[variables('priceSheetTriggerName')]"
             },
             "destContainerName": {
               "type": "string",
@@ -2191,16 +2315,21 @@
       "type": "string",
       "value": "[format('{0}{1}', reference(resourceId('Microsoft.Resources/deployments', 'deploy-cost-storage'), '2025-04-01').outputs.primaryBlobEndpoint.value, parameters('containerName'))]"
     },
-    "billingProfileScopeId": {
+    "billingScopeId": {
       "type": "string",
-      "value": "[variables('billingProfileScopeId')]"
+      "value": "[variables('billingScopeId')]"
+    },
+    "agreementType": {
+      "type": "string",
+      "value": "[variables('agreementType')]"
     },
     "exportNames": {
       "type": "object",
       "value": {
         "onetime": "[format('{0}-focus-onetime', variables('effectiveExportPrefix'))]",
         "daily": "[format('{0}-focus-daily', variables('effectiveExportPrefix'))]",
-        "monthly": "[format('{0}-focus-monthly', variables('effectiveExportPrefix'))]"
+        "monthly": "[format('{0}-focus-monthly', variables('effectiveExportPrefix'))]",
+        "pricesheet": "[format('{0}-pricesheet', variables('effectiveExportPrefix'))]"
       }
     },
     "exportPrincipalIds": {
@@ -2222,6 +2351,10 @@
     "monthlySourcePath": {
       "type": "string",
       "value": "[variables('monthlySourcePath')]"
+    },
+    "priceSheetSourcePath": {
+      "type": "string",
+      "value": "[variables('priceSheetSourcePath')]"
     },
     "vnetId": {
       "type": "string",
@@ -2263,13 +2396,17 @@
       "type": "string",
       "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.monthlyTriggerName.value, '')]"
     },
+    "priceSheetTriggerName": {
+      "type": "string",
+      "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.priceSheetTriggerName.value, '')]"
+    },
     "destinationContainer": {
       "type": "string",
       "value": "[if(parameters('deployDataFactory'), reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.destContainerName.value, '')]"
     },
     "startTriggersCommand": {
       "type": "string",
-      "value": "[if(parameters('deployDataFactory'), format('az datafactory trigger start -g {0} --factory-name {1} -n {2}; az datafactory trigger start -g {3} --factory-name {4} -n {5}', resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dailyTriggerName.value, resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.monthlyTriggerName.value), '')]"
+      "value": "[if(parameters('deployDataFactory'), format('az datafactory trigger start -g {0} --factory-name {1} -n {2}; az datafactory trigger start -g {3} --factory-name {4} -n {5}; az datafactory trigger start -g {6} --factory-name {7} -n {8}', resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dailyTriggerName.value, resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.monthlyTriggerName.value, resourceGroup().name, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.dataFactoryName.value, reference(resourceId('Microsoft.Resources/deployments', 'deploy-adf'), '2025-04-01').outputs.priceSheetTriggerName.value), '')]"
     },
     "readerSasToken": {
       "type": "string",

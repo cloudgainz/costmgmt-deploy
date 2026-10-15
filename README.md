@@ -1,8 +1,12 @@
 # Cost Management exports + Data Mover
 
-Deploys FOCUS cost exports for your Microsoft Customer Agreement (MCA) billing
-profile, plus an Azure Data Factory that copies those exports to CloudGainz on a
-daily and monthly schedule.
+Deploys FOCUS cost exports and a price sheet export for your Microsoft Customer
+Agreement (MCA) billing profile or Enterprise Agreement (EA) enrollment, plus an
+Azure Data Factory that copies those exports to CloudGainz on a daily and monthly
+schedule.
+
+EA or MCA is worked out from the billing account ID. An EA enrollment number is
+all digits, an MCA account ID looks like `guid:guid_date`.
 
 **[Deploy to Azure](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgainz%2Fcostmgmt-deploy%2Fmain%2Farm%2FmainTemplate.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fcloudgainz%2Fcostmgmt-deploy%2Fmain%2Fui%2FcreateUiDefinition.json)**
 
@@ -21,17 +25,19 @@ In the resource group you pick:
 
 - A storage account the cost exports are written to, with a private endpoint,
   virtual network and private DNS zone
-- An Azure Data Factory with a pipeline and two schedules (daily and monthly)
-  that copy the exports to CloudGainz
+- An Azure Data Factory with a pipeline and three schedules (daily, monthly and
+  price sheet) that copy the exports to CloudGainz
 
 The deployment also approves the Data Factory's private endpoint on the export
-storage account and starts both schedules, so there is nothing to finish by
+storage account and starts all three schedules, so there is nothing to finish by
 hand afterwards.
 
-On your billing profile:
+On your billing profile (MCA) or enrollment (EA):
 
 - Three FOCUS cost exports: one-time, daily (month to date) and monthly (last
   month)
+- A price sheet export: daily, current month. This is your unit price list, not
+  usage
 
 ### How it fits together
 
@@ -44,7 +50,7 @@ flowchart TB
     direction TB
 
     subgraph pre["Already there before the deployment"]
-      billing["MCA billing profile"]
+      billing["MCA billing profile or EA enrollment"]
       umi["Export identity<br/>user-assigned managed identity<br/>with Billing profile contributor"]
     end
 
@@ -57,17 +63,17 @@ flowchart TB
         s3["finalize-adf"]
       end
 
-      exports["FOCUS cost exports<br/>one-time, daily, monthly<br/>live on the billing profile"]
+      exports["FOCUS cost exports + price sheet<br/>one-time, daily, monthly, pricesheet<br/>live on the billing profile or enrollment"]
 
       subgraph stg["Export storage account"]
-        container["cost-exports container<br/>focus-daily/ and focus-monthly/"]
+        container["cost-exports container<br/>focus-daily/, focus-monthly/, pricesheet/"]
       end
 
       net["Private endpoint, VNet, private DNS zone<br/>VNet and zone can be existing ones"]
 
       subgraph adf["Data Factory"]
         direction TB
-        trig["Daily and monthly triggers"]
+        trig["Daily, monthly and price sheet triggers"]
         mpe["Managed private endpoint"]
 
         subgraph pipe["DataMoverPipeline"]
@@ -85,7 +91,7 @@ flowchart TB
 
   subgraph cg["CloudGainz tenant (remote)"]
     subgraph landing["Landing storage account - reached with the SAS token"]
-      site["site-name container<br/>focus-daily/ and focus-monthly/"]
+      site["site-name container<br/>focus-daily/, focus-monthly/, pricesheet/"]
       logs["logs container"]
       runbooks["runbooks container"]
     end
@@ -177,6 +183,19 @@ echo "Pick this identity in the deployment form: $NAME"
 Subscription Owner or Global Administrator alone isn't enough for the last
 step. It needs a billing role on the billing profile.
 
+**EA customers:** the exports go on the enrollment instead, and the identity
+gets **Enrollment reader** there. An **Enterprise administrator** runs the same
+command with `ACCT` set to the enrollment number (and no `PROF`), but swaps the
+last step for this:
+
+```bash
+az rest --method put \
+  --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingRoleAssignments/$(cat /proc/sys/kernel/random/uuid)?api-version=2019-10-01-preview" \
+  --body "{\"properties\":{\"principalId\":\"$PRINCIPAL\",\"principalTenantId\":\"$TENANT\",\"roleDefinitionId\":\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingRoleDefinitions/24f8edb6-1668-4659-b5e2-40bb5f3a7d7e\"}}"
+```
+
+The command in the deployment form picks the right one from the shape of `ACCT`.
+
 #### What the identity ends up with
 
 The billing role above is the only one you grant yourself. The deployment adds
@@ -184,10 +203,10 @@ the rest, and none of it reaches past the two resources it creates:
 
 | Role | Scope | Granted by | Used for |
 |---|---|---|---|
-| Billing profile contributor | The billing profile | The setup command | Creating the cost exports |
+| Billing profile contributor (MCA) or Enrollment reader (EA) | The billing profile or enrollment | The setup command | Creating the cost and price sheet exports |
 | Storage Account Contributor | The export storage account only | The deployment | Creating the exports, approving the Data Factory's private endpoint |
 | Role Based Access Control Administrator | The export storage account only | The deployment | Letting each export write to the storage account |
-| Data Factory Contributor | The Data Factory only | The deployment | Stopping and starting the two schedules |
+| Data Factory Contributor | The Data Factory only | The deployment | Stopping and starting the three schedules |
 
 The identity gets no role on the subscription, the resource group or the
 tenant.
@@ -294,17 +313,17 @@ These are made up but realistic, and the rest of this guide uses them.
 | Export storage account | `contosocm4x7k2q` (random suffix; also in the deployment's Outputs as `storageAccountName`) |
 | Data Factory | `contoso-adf-focus-adf` |
 | Pipeline | `contoso-adf-focus-DataMoverPipeline` |
-| Schedules | `contoso-adf-focus-DailyTrigger`, `contoso-adf-focus-MonthlyTrigger` |
+| Schedules | `contoso-adf-focus-DailyTrigger`, `contoso-adf-focus-MonthlyTrigger`, `contoso-adf-focus-PriceSheetTrigger` |
 | Data Factory private endpoint | `contoso-adf-focus-SourceStoragePE` |
-| Exports | `contosocm-focus-onetime`, `contosocm-focus-daily`, `contosocm-focus-monthly` |
+| Exports | `contosocm-focus-onetime`, `contosocm-focus-daily`, `contosocm-focus-monthly`, `contosocm-pricesheet` |
 
 ---
 
 ## After the deployment
 
 Nothing needs doing by hand. The last step of the deployment (`finalize-adf`)
-approves the Data Factory's private endpoint, starts the daily and monthly
-schedules, and sends a small results file to CloudGainz. If you want to check
+approves the Data Factory's private endpoint, starts the daily, monthly and
+price sheet schedules, and sends a small results file to CloudGainz. If you want to check
 its work:
 
 ### The private endpoint
@@ -329,7 +348,7 @@ az datafactory trigger list -g rg-contoso-costmgmt --factory-name contoso-adf-fo
   --query "[].{name:name, state:properties.runtimeState}" -o table
 ```
 
-Both should show `Started`. If you don't know the factory name, list the
+All three should show `Started`. If you don't know the factory name, list the
 factories in the resource group first:
 
 ```bash

@@ -9,7 +9,7 @@
         "type": "Microsoft.Common.TextBlock",
         "visible": true,
         "options": {
-          "text": "Template version: 20261012075550"
+          "text": "Template version: 20261015082649"
         }
       },
       {
@@ -36,7 +36,7 @@
             "visible": true,
             "options": {
               "icon": "Warning",
-              "text": "The exports are created on your MCA billing profile, which this deployment can't grant access to. Before deploying, pick or create a user-assigned managed identity and have a Billing profile owner grant it the Billing profile contributor role on the billing profile.",
+              "text": "The exports are created on your MCA billing profile or EA enrollment, which this deployment can't grant access to. Before deploying, pick or create a user-assigned managed identity and grant it a billing role: Billing profile contributor on the billing profile (MCA, granted by a Billing profile owner) or Enrollment reader on the enrollment (EA, granted by an Enterprise administrator).",
               "uri": "https://learn.microsoft.com/azure/cost-management-billing/manage/understand-mca-roles"
             }
           },
@@ -44,9 +44,17 @@
             "name": "billingAccountId",
             "type": "Microsoft.Common.TextBox",
             "label": "Billing account ID",
-            "toolTip": "MCA billing account ID.",
+            "toolTip": "EA: your enrollment number (all digits). MCA: the account ID that looks like guid:guid_date. This decides which kind of billing the exports are set up for.",
             "constraints": {
               "required": true
+            }
+          },
+          {
+            "name": "agreementInfo",
+            "type": "Microsoft.Common.TextBlock",
+            "visible": "[not(empty(steps('costManagement').billingAccountId))]",
+            "options": {
+              "text": "[if(contains(steps('costManagement').billingAccountId, ':'), 'Detected: Microsoft Customer Agreement. Exports go on the billing profile.', 'Detected: Enterprise Agreement. Exports go on the enrollment, no billing profile needed.')]"
             }
           },
           {
@@ -54,6 +62,7 @@
             "type": "Microsoft.Common.TextBox",
             "label": "Billing profile ID",
             "toolTip": "MCA billing profile ID. az billing profile list --account-name <billing account id>",
+            "visible": "[contains(steps('costManagement').billingAccountId, ':')]",
             "constraints": {
               "required": true
             }
@@ -87,7 +96,7 @@
                 "name": "identitySetupCommand",
                 "type": "Microsoft.Common.TextBox",
                 "label": "Commands",
-                "defaultValue": "# Run in Azure Cloud Shell (Bash) as a Billing profile owner.\n# Needs rights to create the identity in the subscription too.\nRG='<resource-group>'\nNAME='<site-name>-umi'\nLOCATION='<region, e.g. eastus2>'\nACCT='<billing account ID>'\nPROF='<billing profile ID>'\n\naz group create -n \"$RG\" -l \"$LOCATION\"\naz identity create -g \"$RG\" -n \"$NAME\" -l \"$LOCATION\"\nPRINCIPAL=$(az identity show -g \"$RG\" -n \"$NAME\" --query principalId -o tsv)\nTENANT=$(az account show --query tenantId -o tsv)\n\n# new identities take a moment to show up in Entra\nsleep 30\n\n# grant Billing profile contributor on the billing profile\naz rest --method post \\\n  --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/createBillingRoleAssignment?api-version=2024-04-01\" \\\n  --body \"{\\\"principalId\\\":\\\"$PRINCIPAL\\\",\\\"principalTenantId\\\":\\\"$TENANT\\\",\\\"roleDefinitionId\\\":\\\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/billingRoleDefinitions/40000000-aaaa-bbbb-cccc-100000000001\\\"}\"\n\necho \"Pick this identity in the deployment form: $NAME\"\n",
+                "defaultValue": "# Run in Azure Cloud Shell (Bash) as a Billing profile owner (MCA) or\n# Enterprise administrator (EA). Needs rights to create the identity in the subscription too.\nRG='<resource-group>'\nNAME='<site-name>-umi'\nLOCATION='<region, e.g. eastus2>'\nACCT='<billing account ID or EA enrollment number>'\nPROF='<billing profile ID, MCA only>'\n\naz group create -n \"$RG\" -l \"$LOCATION\"\naz identity create -g \"$RG\" -n \"$NAME\" -l \"$LOCATION\"\nPRINCIPAL=$(az identity show -g \"$RG\" -n \"$NAME\" --query principalId -o tsv)\nTENANT=$(az account show --query tenantId -o tsv)\n\n# new identities take a moment to show up in Entra\nsleep 30\n\nif [[ \"$ACCT\" == *:* ]]; then\n  # MCA - Billing profile contributor on the billing profile\n  az rest --method post \\\n    --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/createBillingRoleAssignment?api-version=2024-04-01\" \\\n    --body \"{\\\"principalId\\\":\\\"$PRINCIPAL\\\",\\\"principalTenantId\\\":\\\"$TENANT\\\",\\\"roleDefinitionId\\\":\\\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingProfiles/$PROF/billingRoleDefinitions/40000000-aaaa-bbbb-cccc-100000000001\\\"}\"\nelse\n  # EA - Enrollment reader on the enrollment\n  az rest --method put \\\n    --url \"https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$ACCT/billingRoleAssignments/$(cat /proc/sys/kernel/random/uuid)?api-version=2019-10-01-preview\" \\\n    --body \"{\\\"properties\\\":{\\\"principalId\\\":\\\"$PRINCIPAL\\\",\\\"principalTenantId\\\":\\\"$TENANT\\\",\\\"roleDefinitionId\\\":\\\"/providers/Microsoft.Billing/billingAccounts/$ACCT/billingRoleDefinitions/24f8edb6-1668-4659-b5e2-40bb5f3a7d7e\\\"}}\"\nfi\n\necho \"Pick this identity in the deployment form: $NAME\"\n",
                 "multiLine": true,
                 "constraints": {
                   "required": false
@@ -129,6 +138,26 @@
                 {
                   "label": "Csv",
                   "value": "Csv"
+                }
+              ],
+              "required": true
+            }
+          },
+          {
+            "name": "priceSheetDatasetVersion",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Price sheet dataset version",
+            "defaultValue": "2023-05-01",
+            "toolTip": "2023-05-01 matches the FinOps hub schemas. Only change it if the destination can read the newer columns.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "2023-05-01",
+                  "value": "2023-05-01"
+                },
+                {
+                  "label": "2024-08-01",
+                  "value": "2024-08-01"
                 }
               ],
               "required": true
@@ -369,13 +398,14 @@
       "siteName": "[steps('dataMover').siteName]",
       "location": "[location()]",
       "billingAccountId": "[steps('costManagement').billingAccountId]",
-      "billingProfileId": "[steps('costManagement').billingProfileId]",
+      "billingProfileId": "[if(contains(steps('costManagement').billingAccountId, ':'), steps('costManagement').billingProfileId, '')]",
       "exportScriptIdentityId": "[steps('costManagement').exportIdentity.id]",
       "exportPrefix": "[steps('costManagement').exportPrefix]",
       "containerName": "[steps('costManagement').containerName]",
       "exportFormat": "[steps('costManagement').exportFormat]",
       "compressionMode": "[if(equals(steps('costManagement').exportFormat, 'Parquet'), 'snappy', 'gzip')]",
       "focusDatasetVersion": "[steps('costManagement').focusDatasetVersion]",
+      "priceSheetDatasetVersion": "[steps('costManagement').priceSheetDatasetVersion]",
       "enablePrivateEndpoint": "[steps('networking').enablePrivateEndpoint]",
       "deployDataFactory": "[steps('dataMover').deployDataFactory]",
       "customerStorageAccount": "[steps('dataMover').customerStorageAccount]",
